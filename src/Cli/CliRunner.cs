@@ -71,6 +71,8 @@ internal static class CliRunner
                     return CmdPe(opts, elevated);
                 case "integrity":
                     return CmdIntegrity(opts, elevated);
+                case "hooks":
+                    return CmdHooks(opts, elevated);
                 default:
                     Console.Error.WriteLine(
                         $"Verbo desconocido: '{verb}'. Ejecuta 'MemReader.exe help' para ver el uso.");
@@ -382,6 +384,24 @@ internal static class CliRunner
         return 0;
     }
 
+    private static int CmdHooks(Dictionary<string, string> opts, bool elevated)
+    {
+        int pid = RequirePid(opts);
+        WarnIfNotElevated(elevated);
+        using var reader = new ProcessMemoryReader(pid);
+        var progress = Progress(opts);
+        var hooks = HookScanner.Scan(reader, progress, CancellationToken.None);
+        EndProgress();
+
+        var sb = new StringBuilder();
+        sb.AppendLine("module,function,address,type,target,bytes");
+        foreach (var h in hooks)
+            sb.AppendLine($"{h.Module},{Csv(h.Function)},{h.AddressText},{h.HookType},{Csv(h.Target)},{h.PrologueHex}");
+        WriteOutput(sb.ToString(), Get(opts, "out"));
+        Console.Error.WriteLine($"{hooks.Count} posibles hooks inline.");
+        return 0;
+    }
+
     private static int PrintHelp()
     {
         Console.WriteLine(
@@ -419,6 +439,8 @@ VERBOS:
             Sin --base usa el modulo principal.
   integrity --pid <N> [--out <archivo.csv>]
             Compara el codigo en memoria vs el archivo en disco (hollowing/hooks).
+  hooks     --pid <N> [--out <archivo.csv>]
+            Detecta hooks inline en exports de ntdll/kernel32/etc.
   version   Muestra la version.
   help      Muestra esta ayuda.
 

@@ -62,6 +62,8 @@ public sealed class MainForm : Form
     private TextBox _txtPeInfo = null!;
     private ListView _lvIntegrity = null!;
     private CancellationTokenSource? _integCts;
+    private ListView _lvHooks = null!;
+    private CancellationTokenSource? _hookCts;
     private readonly System.Windows.Forms.Timer _refreshTimer;
 
     private ProcessMemoryReader? _reader;
@@ -172,6 +174,7 @@ public sealed class MainForm : Form
         tabs.TabPages.Add(BuildIocTab());
         tabs.TabPages.Add(BuildPeTab());
         tabs.TabPages.Add(BuildIntegrityTab());
+        tabs.TabPages.Add(BuildHooksTab());
         tabs.TabPages.Add(BuildInformeTab());
         split2.Panel2.Controls.Add(tabs);
 
@@ -217,6 +220,7 @@ public sealed class MainForm : Form
             _hashCts?.Cancel();
             _iocCts?.Cancel();
             _integCts?.Cancel();
+            _hookCts?.Cancel();
             _reader?.Dispose();
         };
     }
@@ -845,6 +849,49 @@ public sealed class MainForm : Form
         };
 
         page.Controls.Add(_lvIntegrity);
+        page.Controls.Add(hint);
+        page.Controls.Add(bar);
+        return page;
+    }
+
+    private TabPage BuildHooksTab()
+    {
+        var page = new TabPage("Hooks");
+        var bar = new Panel { Dock = DockStyle.Top, Height = 34 };
+        var btnGo = new Button { Text = "Buscar hooks", Left = 4, Top = 4, Width = 130 };
+        btnGo.Click += (_, _) => _ = DoHooksAsync();
+        var btnStop = new Button { Text = "Detener", Left = 140, Top = 4, Width = 80 };
+        btnStop.Click += (_, _) => _hookCts?.Cancel();
+        var btnCsv = new Button { Text = "Exportar CSV...", Left = 226, Top = 4, Width = 120 };
+        btnCsv.Click += (_, _) => ExportHooksCsv();
+        bar.Controls.AddRange(new Control[] { btnGo, btnStop, btnCsv });
+
+        _lvHooks = new ListView
+        {
+            Dock = DockStyle.Fill,
+            View = View.Details,
+            FullRowSelect = true,
+            GridLines = true,
+            MultiSelect = false
+        };
+        _lvHooks.Columns.Add("Modulo", 110);
+        _lvHooks.Columns.Add("Funcion", 190);
+        _lvHooks.Columns.Add("Direccion", 150);
+        _lvHooks.Columns.Add("Tipo", 120);
+        _lvHooks.Columns.Add("Destino", 200);
+        _lvHooks.Columns.Add("Bytes", 170);
+        _lvHooks.DoubleClick += (_, _) => JumpFromHook();
+
+        var hint = new Label
+        {
+            Dock = DockStyle.Bottom,
+            Height = 22,
+            Text = "Prologos de exports que empiezan con un salto (posible hook de EDR/AV o inyeccion). Solo deteccion. Doble clic para ver.",
+            ForeColor = Color.Gray,
+            Padding = new Padding(4, 2, 0, 0)
+        };
+
+        page.Controls.Add(_lvHooks);
         page.Controls.Add(hint);
         page.Controls.Add(bar);
         return page;
@@ -2145,6 +2192,74 @@ public sealed class MainForm : Form
                 string det = it.SubItems[4].Text.Replace("\"", "\"\"");
                 sb.AppendLine($"{it.Text},{it.SubItems[1].Text},{it.SubItems[2].Text},{it.SubItems[3].Text},\"{det}\"");
             }
+            File.WriteAllText(sfd.FileName, sb.ToString());
+            _status.Text = "Guardado en " + sfd.FileName;
+        }
+        catch (Exception ex) { _status.Text = "Error al guardar: " + ex.Message; }
+    }
+
+    // ---------------- Hooks inline ----------------
+
+    private async Task DoHooksAsync()
+    {
+        if (_reader == null) { _status.Text = "Abre un proceso primero."; return; }
+        _lvHooks.Items.Clear();
+        _hookCts = new CancellationTokenSource();
+        var ct = _hookCts.Token;
+        var reader = _reader;
+        var progress = new Progress<string>(m => _status.Text = m);
+        try
+        {
+            var hooks = await Task.Run(() => HookScanner.Scan(reader, progress, ct), ct);
+            _lvHooks.BeginUpdate();
+            foreach (var h in hooks)
+            {
+                var it = new ListViewItem(h.Module) { Tag = h.Address };
+                it.SubItems.Add(h.Function);
+                it.SubItems.Add(h.AddressText);
+                it.SubItems.Add(h.HookType);
+                it.SubItems.Add(h.Target);
+                it.SubItems.Add(h.PrologueHex);
+                it.ForeColor = Color.Firebrick;
+                _lvHooks.Items.Add(it);
+            }
+            _lvHooks.EndUpdate();
+            _status.Text = hooks.Count == 0
+                ? "No se detectaron hooks inline en los exports analizados."
+                : $"{hooks.Count} posibles hooks inline detectados.";
+        }
+        catch (OperationCanceledException) { _status.Text = "Busqueda de hooks cancelada."; }
+        catch (Exception ex) { _status.Text = "Error: " + ex.Message; }
+        finally { _hookCts?.Dispose(); _hookCts = null; }
+    }
+
+    private void JumpFromHook()
+    {
+        if (_reader == null || _lvHooks.SelectedItems.Count == 0) return;
+        ulong addr = (ulong)_lvHooks.SelectedItems[0].Tag!;
+        _txtAddress.Text = "0x" + addr.ToString("X");
+        _txtSize.Text = "64";
+        ReadHexAtAddress();
+        if (_txtHex.Parent is TabPage page && page.Parent is TabControl tc)
+            tc.SelectedTab = page;
+    }
+
+    private void ExportHooksCsv()
+    {
+        if (_lvHooks.Items.Count == 0) { _status.Text = "No hay hooks que exportar."; return; }
+        using var sfd = new SaveFileDialog
+        {
+            Title = "Guardar hooks detectados",
+            FileName = "hooks.csv",
+            Filter = "CSV (*.csv)|*.csv|Todos los archivos (*.*)|*.*"
+        };
+        if (sfd.ShowDialog(this) != DialogResult.OK) return;
+        try
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("modulo,funcion,direccion,tipo,destino,bytes");
+            foreach (ListViewItem it in _lvHooks.Items)
+                sb.AppendLine($"{it.Text},{it.SubItems[1].Text},{it.SubItems[2].Text},{it.SubItems[3].Text},{it.SubItems[4].Text},{it.SubItems[5].Text}");
             File.WriteAllText(sfd.FileName, sb.ToString());
             _status.Text = "Guardado en " + sfd.FileName;
         }
