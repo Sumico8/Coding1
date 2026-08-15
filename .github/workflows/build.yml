@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "claude/windows-pentesting-memory-reader-d07jdf"
+      - "claude/memreader-ui-search-offsets-s9cr9t"
     tags:
       - "v*"
   workflow_dispatch:
@@ -50,7 +51,7 @@ jobs:
           if-no-files-found: error
 
       - name: Update rolling "latest" release (branch push / manual run)
-        if: github.ref == 'refs/heads/claude/windows-pentesting-memory-reader-d07jdf'
+        if: github.ref == 'refs/heads/claude/windows-pentesting-memory-reader-d07jdf' || github.ref == 'refs/heads/claude/memreader-ui-search-offsets-s9cr9t'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest

@@ -41,6 +41,21 @@ de escritorio (WinForms, .NET 8) que:
   (con índice) para análisis forense en tu laboratorio.
 - **Export a minidump `.dmp`** (memoria completa) compatible con WinDbg — la misma
   capacidad que "Crear archivo de volcado" del Administrador de tareas.
+- **Interfaz con temas claro/oscuro**: diseño limpio con acentos de color semánticos
+  (verde = legible/OK, rojo = RWX/peligro, azul = módulos/estático, ámbar = aviso).
+  Botón **🌙/☀** en la barra superior para alternar en caliente; recuerda tu
+  preferencia entre sesiones.
+- **Búsqueda rápida en cada lista**: caja de **Filtrar** en cada pestaña de
+  resultados y un buscador **global** en la cabecera para encontrar cualquier fila
+  al instante (por dirección, valor, módulo, texto…).
+- **Etiquetas e identificador de offsets/punteros**: ponle nombre y categoría a una
+  dirección o puntero ("Barra de stamina" [Jugador], "Árbol" [Entorno]). Se **guarda
+  por proceso** (`%APPDATA%\MemReader\tables\<proceso>.json`) y se **re-resuelve entre
+  reinicios** por su ruta de puntero `módulo+offset`. Clic derecho en cualquier
+  resultado → *Etiquetar esta dirección* (con **Sugerir ruta estable**). El visor hex
+  muestra una banda **Identidad** que te dice de qué es la dirección que estás viendo:
+  su `módulo+offset`, la región donde vive (estática/dinámica, protección) y la
+  etiqueta que coincide.
 
 Todo se apoya en APIs **documentadas y soportadas** de Windows
 (`OpenProcess`, `VirtualQueryEx`, `ReadProcessMemory`). No modifica la memoria de
@@ -169,6 +184,12 @@ src/ProcessMemoryReader.cs    Núcleo: abrir proceso, enumerar, leer, módulos, 
 src/PointerScanner.cs         Motor de punteros/offsets (índice, escaneo, resolución)
 src/ValueInterpreter.cs       Interpreta bytes como tipos y construye patrones
 src/HexFormatter.cs           Volcado hexadecimal
+src/Theme.cs                  Paleta de colores (temas claro/oscuro)
+src/ThemeManager.cs           Aplica el tema y guarda la preferencia
+src/ThemedControls.cs         ListView/TabControl/ComboBox con dibujado propio
+src/ListViewFilter.cs         Filtro rápido para las listas de resultados
+src/Annotation.cs             Etiquetas: modelo, almacén JSON y motor de identificación
+src/AnnotationDialog.cs       Diálogo para crear/editar etiquetas
 src/MainForm.cs               Interfaz gráfica
 src/Program.cs                Punto de entrada
 ```

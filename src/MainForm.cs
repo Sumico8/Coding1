@@ -56,6 +56,19 @@ public sealed class MainForm : Form
     private List<MemoryRegion> _regions = new();
     private CancellationTokenSource? _searchCts;
 
+    // --- Interfaz nueva: tema, busqueda global y etiquetas/identificador ---
+    private TabControl _tabs = null!;
+    private Button _btnTheme = null!;
+    private TextBox _txtGlobalFind = null!;
+    private readonly AnnotationStore _store = new();
+    private Identifier? _identifier;
+    private ThemedListView _lvLabels = null!;
+    private TextBox _lblIdentity = null!;
+    private ContextMenuStrip _ctxLabel = null!;
+    private readonly Dictionary<TabPage, ListViewFilter> _tabFilters = new();
+    private ListViewFilter? _filterResults, _filterScan, _filterStrings, _filterPointers,
+        _filterSecurity, _filterThreads, _filterModules, _filterLabels;
+
     private static readonly Font Mono = new("Consolas", 9F);
 
     public MainForm()
@@ -67,23 +80,30 @@ public sealed class MainForm : Form
         MinimumSize = new Size(960, 600);
 
         // ---------- Barra superior ----------
-        var topBar = new Panel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(8, 8, 8, 4) };
-        var btnRefresh = new Button { Text = "Actualizar procesos", Left = 0, Top = 6, Width = 150, Anchor = AnchorStyles.Left | AnchorStyles.Top };
+        var topBar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 44, WrapContents = false, Padding = new Padding(8, 8, 8, 4) };
+        var btnRefresh = new Button { Text = "Actualizar procesos", Width = 150, Margin = new Padding(0, 4, 8, 0) };
         btnRefresh.Click += (_, _) => LoadProcesses();
 
-        var lblFilter = new Label { Text = "Filtro:", Left = 160, Top = 11, Width = 45, Anchor = AnchorStyles.Left | AnchorStyles.Top };
-        _txtFilter = new TextBox { Left = 205, Top = 8, Width = 200, Anchor = AnchorStyles.Left | AnchorStyles.Top };
+        var lblFilter = new Label { Text = "Procesos:", AutoSize = true, Margin = new Padding(0, 9, 3, 0), Tag = "hint" };
+        _txtFilter = new TextBox { Width = 160, Margin = new Padding(0, 6, 12, 0) };
         _txtFilter.TextChanged += (_, _) => LoadProcesses();
 
-        _lblAdmin = new Label { Left = 430, Top = 11, Width = 700, Anchor = AnchorStyles.Left | AnchorStyles.Top, ForeColor = Color.DarkRed };
+        var lblFind = new Label { Text = "Buscar:", AutoSize = true, Margin = new Padding(0, 9, 3, 0), Tag = "hint" };
+        _txtGlobalFind = new TextBox { Width = 180, Margin = new Padding(0, 6, 12, 0) };
+        _txtGlobalFind.TextChanged += (_, _) => OnGlobalFindChanged();
 
-        topBar.Controls.AddRange(new Control[] { btnRefresh, lblFilter, _txtFilter, _lblAdmin });
+        _btnTheme = new Button { Text = ThemeManager.IsDark ? "☀ Claro" : "🌙 Oscuro", Width = 96, Margin = new Padding(0, 4, 12, 0) };
+        _btnTheme.Click += (_, _) => ThemeManager.Toggle();
+
+        _lblAdmin = new Label { AutoSize = true, Margin = new Padding(0, 9, 0, 0), ForeColor = Color.DarkRed, Tag = "semantic" };
+
+        topBar.Controls.AddRange(new Control[] { btnRefresh, lblFilter, _txtFilter, lblFind, _txtGlobalFind, _btnTheme, _lblAdmin });
 
         // ---------- Split principal (izquierda: procesos / derecha: analisis) ----------
         var split1 = new SplitContainer { Dock = DockStyle.Fill, FixedPanel = FixedPanel.Panel1 };
 
         // ----- Panel izquierdo: procesos -----
-        _lvProcesses = new ListView
+        _lvProcesses = new ThemedListView
         {
             Dock = DockStyle.Fill,
             View = View.Details,
@@ -110,7 +130,7 @@ public sealed class MainForm : Form
         // Regiones (arriba)
         _lblProcess = new Label { Dock = DockStyle.Top, Height = 24, Text = "Ningun proceso abierto.", Padding = new Padding(4, 4, 0, 0), Font = new Font("Segoe UI", 9F, FontStyle.Bold) };
 
-        var regionsBar = new Panel { Dock = DockStyle.Top, Height = 32 };
+        var regionsBar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 38, WrapContents = true, Padding = new Padding(4, 4, 4, 4) };
         _chkOnlyReadable = new CheckBox { Text = "Solo regiones legibles", Checked = true, Left = 4, Top = 6, Width = 170 };
         _chkOnlyReadable.CheckedChanged += (_, _) => { if (_reader != null) EnumerateRegions(); };
         var btnDump = new Button { Text = "Volcar region a archivo...", Left = 180, Top = 3, Width = 190 };
@@ -123,7 +143,7 @@ public sealed class MainForm : Form
         btnEntropy.Click += (_, _) => ComputeEntropy();
         regionsBar.Controls.AddRange(new Control[] { _chkOnlyReadable, btnDump, btnDumpAll, btnMinidump, btnEntropy });
 
-        _lvRegions = new ListView
+        _lvRegions = new ThemedListView
         {
             Dock = DockStyle.Fill,
             View = View.Details,
@@ -146,21 +166,38 @@ public sealed class MainForm : Form
         split2.Panel1.Controls.Add(regionsHost);
 
         // Pestanas (abajo): visor hex + busqueda + modulos
-        var tabs = new TabControl { Dock = DockStyle.Fill };
-        tabs.TabPages.Add(BuildHexTab());
-        tabs.TabPages.Add(BuildSearchTab(out _txtSearch, out _lvResults, out _btnSearch));
-        tabs.TabPages.Add(BuildModulesTab());
-        tabs.TabPages.Add(BuildPointersTab());
-        tabs.TabPages.Add(BuildScanTab());
-        tabs.TabPages.Add(BuildStringsTab());
-        tabs.TabPages.Add(BuildSecurityTab());
-        tabs.TabPages.Add(BuildThreadsTab());
-        tabs.TabPages.Add(BuildDisasmTab());
-        split2.Panel2.Controls.Add(tabs);
+        _tabs = new ThemedTabControl { Dock = DockStyle.Fill };
+        _tabs.TabPages.Add(BuildHexTab());
+        _tabs.TabPages.Add(BuildSearchTab(out _txtSearch, out _lvResults, out _btnSearch));
+        _tabs.TabPages.Add(BuildModulesTab());
+        _tabs.TabPages.Add(BuildPointersTab());
+        _tabs.TabPages.Add(BuildScanTab());
+        _tabs.TabPages.Add(BuildLabelsTab());
+        _tabs.TabPages.Add(BuildStringsTab());
+        _tabs.TabPages.Add(BuildSecurityTab());
+        _tabs.TabPages.Add(BuildThreadsTab());
+        _tabs.TabPages.Add(BuildDisasmTab());
+        _tabs.SelectedIndexChanged += (_, _) => OnTabChanged();
+        split2.Panel2.Controls.Add(_tabs);
 
-        // Temporizador para el auto-refresco del visor hexadecimal.
+        // El menu contextual "Etiquetar esta direccion..." es compartido por las
+        // listas de resultados; el ListView origen se guarda en su propio Tag.
+        _ctxLabel = new ContextMenuStrip();
+        var miLabel = new ToolStripMenuItem("Etiquetar esta direccion...");
+        miLabel.Click += (_, _) => { if (_ctxLabel.SourceControl is ListView lv) EtiquetarFromContext(lv); };
+        _ctxLabel.Items.Add(miLabel);
+        foreach (var lv in new ListView[] { _lvResults, _lvScan, _lvPointers, _lvStrings })
+            lv.ContextMenuStrip = _ctxLabel;
+
+        // Temporizador (1 s): auto-refresco del visor hex y de los valores en vivo
+        // de la pestana de etiquetas.
         _refreshTimer = new System.Windows.Forms.Timer { Interval = 1000 };
-        _refreshTimer.Tick += (_, _) => { if (_reader != null) ReadHexAtAddress(); };
+        _refreshTimer.Tick += (_, _) =>
+        {
+            if (_reader == null) return;
+            if (_chkAutoRefresh.Checked) ReadHexAtAddress();
+            if (_lvLabels != null && _tabs.SelectedTab == _lvLabels.Parent) RefreshLabelLiveValues();
+        };
 
         split1.Panel2.Controls.Add(split2);
 
@@ -179,6 +216,11 @@ public sealed class MainForm : Form
         _txtSize = _hexSize!;
         _txtHex = _hexView!;
 
+        // Tema: aplicar ahora y re-aplicar en caliente al alternar.
+        ApplyThemeNow();
+        ThemeManager.ThemeChanged += OnThemeChanged;
+        _store.Changed += (_, _) => RefreshLabelsList();
+
         Load += (_, _) =>
         {
             // SplitterDistance se fija aqui, cuando los contenedores ya tienen
@@ -196,8 +238,329 @@ public sealed class MainForm : Form
             _stringsCts?.Cancel();
             _scanCts?.Cancel();
             _secCts?.Cancel();
+            ThemeManager.ThemeChanged -= OnThemeChanged;
+            _store.Save();
             _reader?.Dispose();
         };
+    }
+
+    // ---------------- Tema ----------------
+
+    private void OnThemeChanged(object? sender, EventArgs e) => ApplyThemeNow();
+
+    private void ApplyThemeNow()
+    {
+        ThemeManager.Apply(this);
+        if (_ctxLabel != null)
+        {
+            _ctxLabel.BackColor = ThemeManager.Current.Surface;
+            _ctxLabel.ForeColor = ThemeManager.Current.TextPrimary;
+        }
+        if (_btnTheme != null)
+            _btnTheme.Text = ThemeManager.IsDark ? "☀ Claro" : "🌙 Oscuro";
+        ReapplySemanticColors();
+        Invalidate(true);
+    }
+
+    /// <summary>Recalcula los colores semanticos de las filas desde sus datos, para
+    /// que sigan legibles tras cambiar de tema.</summary>
+    private void ReapplySemanticColors()
+    {
+        var t = ThemeManager.Current;
+
+        _lblAdmin.ForeColor = _lblAdmin.Text.StartsWith("Ejecutando", StringComparison.Ordinal)
+            ? t.OkText : t.BadText;
+
+        // Regiones: entropia > 7.2 en rojo.
+        foreach (ListViewItem it in _lvRegions.Items)
+        {
+            if (it.SubItems.Count > 4 &&
+                double.TryParse(it.SubItems[4].Text, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out double h))
+                it.ForeColor = h >= 7.2 ? t.SeverityHigh : t.TextPrimary;
+        }
+        // Hilos: inicio dinamico (fuera de modulo) en rojo.
+        foreach (ListViewItem it in _lvThreads.Items)
+            it.ForeColor = it.SubItems.Count > 2 && it.SubItems[2].Text == "(dinamica)"
+                ? t.SeverityHigh : t.TextPrimary;
+        // Seguridad: por severidad.
+        foreach (ListViewItem it in _lvSecurity.Items)
+            it.ForeColor = it.Text switch
+            {
+                "Alta" => t.SeverityHigh,
+                "Media" => t.SeverityMedium,
+                _ => t.TextPrimary,
+            };
+        // Etiquetas: color por categoria.
+        foreach (ListViewItem it in _lvLabels.Items)
+            if (it.Tag is Annotation a)
+                it.ForeColor = t.CategoryColor(a.Category);
+    }
+
+    // ---------------- Busqueda (filtros por lista) ----------------
+
+    /// <summary>Anade una caja de filtro rapido a una barra y la asocia al ListView.</summary>
+    private ListViewFilter AddFilter(FlowLayoutPanel bar, ListView lv, TabPage page)
+    {
+        var lbl = new Label { Text = "Filtrar:", AutoSize = true, Margin = new Padding(12, 8, 3, 0), Tag = "hint" };
+        var box = new TextBox { Width = 150, Margin = new Padding(3, 5, 3, 0) };
+        var f = new ListViewFilter(lv);
+        box.TextChanged += (_, _) => f.Apply(box.Text);
+        _tabFilters[page] = f;
+        bar.Controls.Add(lbl);
+        bar.Controls.Add(box);
+        return f;
+    }
+
+    private void OnGlobalFindChanged()
+    {
+        if (_tabs.SelectedTab != null && _tabFilters.TryGetValue(_tabs.SelectedTab, out var f))
+            f.Apply(_txtGlobalFind.Text);
+    }
+
+    private void OnTabChanged()
+    {
+        // La busqueda global sigue a la pestana activa.
+        if (_tabs.SelectedTab != null && _tabFilters.TryGetValue(_tabs.SelectedTab, out var f))
+            f.Apply(_txtGlobalFind.Text);
+        UpdateTimerState();
+    }
+
+    private void UpdateTimerState()
+    {
+        bool labelsActive = _lvLabels != null && _tabs.SelectedTab == _lvLabels.Parent;
+        if (_reader != null && (_chkAutoRefresh.Checked || labelsActive))
+            _refreshTimer.Start();
+        else
+            _refreshTimer.Stop();
+    }
+
+    // ---------------- Etiquetas / Identificador ----------------
+
+    private TabPage BuildLabelsTab()
+    {
+        var page = new TabPage("Etiquetas");
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, WrapContents = true, Padding = new Padding(6, 4, 6, 4) };
+
+        var btnAdd = new Button { Text = "Anadir", Width = 90, Margin = new Padding(0, 4, 4, 0) };
+        btnAdd.Click += (_, _) => AddOrEditLabel(null);
+        var btnEdit = new Button { Text = "Editar", Width = 80, Margin = new Padding(0, 4, 4, 0) };
+        btnEdit.Click += (_, _) =>
+        {
+            if (_lvLabels.SelectedItems.Count > 0 && _lvLabels.SelectedItems[0].Tag is Annotation a)
+                AddOrEditLabel(a);
+        };
+        var btnDel = new Button { Text = "Eliminar", Width = 90, Margin = new Padding(0, 4, 4, 0) };
+        btnDel.Click += (_, _) => DeleteLabel();
+        var btnImport = new Button { Text = "Importar...", Width = 100, Margin = new Padding(0, 4, 4, 0) };
+        btnImport.Click += (_, _) => ImportLabels();
+        var btnExport = new Button { Text = "Exportar...", Width = 100, Margin = new Padding(0, 4, 4, 0) };
+        btnExport.Click += (_, _) => SaveLabels();
+        bar.Controls.AddRange(new Control[] { btnAdd, btnEdit, btnDel, btnImport, btnExport });
+
+        _lvLabels = new ThemedListView
+        {
+            Dock = DockStyle.Fill,
+            View = View.Details,
+            FullRowSelect = true,
+            GridLines = true,
+            MultiSelect = false,
+        };
+        _lvLabels.Columns.Add("Nombre", 180);
+        _lvLabels.Columns.Add("Categoria", 110);
+        _lvLabels.Columns.Add("Tipo", 80);
+        _lvLabels.Columns.Add("Ancla / ruta", 320);
+        _lvLabels.Columns.Add("Valor en vivo", 140);
+        _lvLabels.Columns.Add("Estado", 90);
+        _lvLabels.DoubleClick += (_, _) => JumpFromLabel();
+
+        var hint = new Label
+        {
+            Dock = DockStyle.Bottom,
+            Height = 22,
+            Text = "Doble clic salta a la direccion viva. Clic derecho en resultados para etiquetar.",
+            ForeColor = Color.Gray, Tag = "hint",
+            Padding = new Padding(4, 2, 0, 0),
+        };
+
+        _filterLabels = AddFilter(bar, _lvLabels, page);
+
+        page.Controls.Add(_lvLabels);
+        page.Controls.Add(hint);
+        page.Controls.Add(bar);
+        return page;
+    }
+
+    private void RefreshLabelsList()
+    {
+        if (_lvLabels == null) return;
+        var t = ThemeManager.Current;
+        List<ModuleInfo>? modules = _identifier?.CurrentModules();
+        _lvLabels.BeginUpdate();
+        _lvLabels.Items.Clear();
+        foreach (var a in _store.Items)
+        {
+            var it = new ListViewItem(a.Name) { Tag = a };
+            it.SubItems.Add(a.Category);
+            it.SubItems.Add(a.Type.ToString());
+            it.SubItems.Add(a.AnchorText);
+            string val = "-";
+            string estado = a.KindText;
+            if (_identifier != null && modules != null)
+            {
+                var addr = _identifier.Resolve(a, modules);
+                estado = addr == null ? "no resuelve" : a.KindText;
+                val = _identifier.LiveValue(a, modules);
+            }
+            it.SubItems.Add(val);
+            it.SubItems.Add(estado);
+            it.ForeColor = t.CategoryColor(a.Category);
+            _lvLabels.Items.Add(it);
+        }
+        _lvLabels.EndUpdate();
+        _filterLabels?.Reset();
+    }
+
+    private void RefreshLabelLiveValues()
+    {
+        if (_identifier == null || _lvLabels == null || _lvLabels.Items.Count == 0) return;
+        var modules = _identifier.CurrentModules();
+        foreach (ListViewItem it in _lvLabels.Items)
+        {
+            if (it.Tag is not Annotation a || it.SubItems.Count <= 5) continue;
+            var addr = _identifier.Resolve(a, modules);
+            it.SubItems[4].Text = _identifier.LiveValue(a, modules);
+            it.SubItems[5].Text = addr == null ? "no resuelve" : a.KindText;
+        }
+    }
+
+    private void AddOrEditLabel(Annotation? existing)
+    {
+        Annotation seed = existing ?? new Annotation();
+        ulong? scanAddr = existing != null ? _identifier?.Resolve(existing) : null;
+        using var dlg = new AnnotationDialog(seed, scanAddr, _scanner, _store.Categories());
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        if (existing == null) _store.Add(dlg.Result);
+        else _store.Update(dlg.Result);
+    }
+
+    private void EtiquetarFromContext(ListView lv)
+    {
+        if (lv.SelectedItems.Count == 0) { _status.Text = "Selecciona una fila para etiquetar."; return; }
+        var row = lv.SelectedItems[0];
+        var seed = new Annotation();
+        ulong? scanAddr = null;
+
+        switch (row.Tag)
+        {
+            case PointerPath p:
+                seed.Kind = AnchorKind.PointerPath;
+                seed.ModuleName = p.ModuleName;
+                seed.BaseOffset = p.BaseOffset;
+                seed.Offsets = new List<long>(p.Offsets);
+                scanAddr = _identifier?.Resolve(seed);
+                break;
+
+            case ulong addr:
+                seed.AbsoluteAddress = addr;
+                seed.LastKnownAddress = addr;
+                seed.Kind = AnchorKind.Absolute;
+                scanAddr = addr;
+                var mo = _scanner?.ResolveModuleOffset(addr);
+                if (mo != null)
+                {
+                    // Si cae dentro de un modulo, proponemos ancla estatica.
+                    seed.Kind = AnchorKind.ModuleOffset;
+                    seed.ModuleName = mo.Value.mod.Name;
+                    seed.BaseOffset = (long)mo.Value.offset;
+                }
+                break;
+
+            default:
+                _status.Text = "Esta fila no tiene una direccion etiquetable.";
+                return;
+        }
+
+        using var dlg = new AnnotationDialog(seed, scanAddr, _scanner, _store.Categories());
+        if (dlg.ShowDialog(this) == DialogResult.OK)
+        {
+            _store.Add(dlg.Result);
+            _status.Text = $"Etiqueta «{dlg.Result.Name}» guardada.";
+        }
+    }
+
+    private void DeleteLabel()
+    {
+        if (_lvLabels.SelectedItems.Count == 0) return;
+        if (_lvLabels.SelectedItems[0].Tag is Annotation a)
+            _store.Remove(a.Id);
+    }
+
+    private void SaveLabels()
+    {
+        if (_store.Items.Count == 0) { _status.Text = "No hay etiquetas que exportar."; return; }
+        using var sfd = new SaveFileDialog
+        {
+            Title = "Exportar etiquetas",
+            FileName = "etiquetas.json",
+            Filter = "JSON (*.json)|*.json|Todos los archivos (*.*)|*.*"
+        };
+        if (sfd.ShowDialog(this) != DialogResult.OK) return;
+        try { _store.Export(sfd.FileName); _status.Text = "Etiquetas exportadas a " + sfd.FileName; }
+        catch (Exception ex) { _status.Text = "Error al exportar: " + ex.Message; }
+    }
+
+    private void ImportLabels()
+    {
+        using var ofd = new OpenFileDialog
+        {
+            Title = "Importar etiquetas",
+            Filter = "JSON (*.json)|*.json|Todos los archivos (*.*)|*.*"
+        };
+        if (ofd.ShowDialog(this) != DialogResult.OK) return;
+        try { _store.Import(ofd.FileName); _status.Text = "Etiquetas importadas."; }
+        catch (Exception ex) { _status.Text = "Error al importar: " + ex.Message; }
+    }
+
+    private void JumpFromLabel()
+    {
+        if (_identifier == null || _lvLabels.SelectedItems.Count == 0) return;
+        if (_lvLabels.SelectedItems[0].Tag is not Annotation a) return;
+        var addr = _identifier.Resolve(a);
+        if (addr == null) { _status.Text = "La etiqueta no resuelve ahora mismo."; return; }
+        _txtAddress.Text = "0x" + addr.Value.ToString("X");
+        _txtSize.Text = "256";
+        ReadHexAtAddress();
+        if (_txtHex.Parent is TabPage page && page.Parent is TabControl tc)
+            tc.SelectedTab = page;
+    }
+
+    private void UpdateIdentityPanel(ulong address)
+    {
+        if (_identifier == null) { _lblIdentity.Text = "Identidad: abre un proceso."; return; }
+        var r = _identifier.Identify(address, _regions);
+        var sb = new StringBuilder();
+        sb.Append("Identidad: ");
+        sb.Append(r.ModuleName != null ? $"{r.ModuleName}+0x{r.ModuleOffset:X}" : $"0x{address:X}");
+        sb.Append(r.IsStatic ? " · estatica" : " · dinamica");
+        var reg = r.Region;
+        if (reg != null) sb.Append($" · {reg.ProtectText}/{reg.TypeText}");
+
+        var t = ThemeManager.Current;
+        if (r.Matches.Count > 0)
+        {
+            var m = r.Matches[0];
+            string near = m.Delta == 0 ? "exacto" : $"+0x{Math.Abs(m.Delta):X}";
+            sb.Append($"   =>   «{m.Ann.Name}» [{m.Ann.Category}] ({near})");
+            if (r.Matches.Count > 1) sb.Append($"  (+{r.Matches.Count - 1} mas)");
+            _lblIdentity.ForeColor = t.CategoryColor(m.Ann.Category);
+        }
+        else
+        {
+            sb.Append($" · {r.TypeGuess}");
+            _lblIdentity.ForeColor = t.TextPrimary;
+        }
+        _lblIdentity.Text = sb.ToString();
     }
 
     // Referencias temporales usadas al construir las pestanas.
@@ -208,7 +571,7 @@ public sealed class MainForm : Form
     private TabPage BuildHexTab()
     {
         var page = new TabPage("Visor hexadecimal");
-        var bar = new Panel { Dock = DockStyle.Top, Height = 34 };
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, WrapContents = true, Padding = new Padding(6, 4, 6, 4) };
 
         var lblAddr = new Label { Text = "Direccion (hex):", Left = 4, Top = 9, Width = 100 };
         _hexAddress = new TextBox { Left = 106, Top = 6, Width = 150, Font = Mono };
@@ -236,6 +599,7 @@ public sealed class MainForm : Form
             ScrollBars = ScrollBars.Both,
             WordWrap = false,
             Font = Mono,
+            Tag = "keepdark",
             BackColor = Color.FromArgb(24, 24, 24),
             ForeColor = Color.FromArgb(220, 220, 220)
         };
@@ -258,14 +622,26 @@ public sealed class MainForm : Form
             ScrollBars = ScrollBars.Vertical,
             WordWrap = false,
             Font = Mono,
+            Tag = "keepdark",
             BackColor = Color.FromArgb(30, 30, 30),
             ForeColor = Color.FromArgb(180, 220, 180)
         };
         interpPanel.Controls.Add(_txtInterp);
         interpPanel.Controls.Add(lblInterp);
 
+        // Banda "Identidad": que es la direccion que estas viendo.
+        _lblIdentity = new TextBox
+        {
+            Dock = DockStyle.Top,
+            ReadOnly = true,
+            BorderStyle = BorderStyle.FixedSingle,
+            Font = Mono,
+            Text = "Identidad: abre un proceso y lee una direccion.",
+        };
+
         page.Controls.Add(_hexView);
         page.Controls.Add(interpPanel);
+        page.Controls.Add(_lblIdentity);
         page.Controls.Add(bar);
         return page;
     }
@@ -273,10 +649,10 @@ public sealed class MainForm : Form
     private TabPage BuildSearchTab(out TextBox txtSearch, out ListView lvResults, out Button btnSearch)
     {
         var page = new TabPage("Buscar en memoria");
-        var bar = new Panel { Dock = DockStyle.Top, Height = 34 };
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, WrapContents = true, Padding = new Padding(6, 4, 6, 4) };
 
         var lblType = new Label { Text = "Tipo:", Left = 4, Top = 9, Width = 38 };
-        _cmbSearchType = new ComboBox
+        _cmbSearchType = new ThemedComboBox
         {
             Left = 44, Top = 6, Width = 100,
             DropDownStyle = ComboBoxStyle.DropDownList
@@ -294,7 +670,7 @@ public sealed class MainForm : Form
 
         bar.Controls.AddRange(new Control[] { lblType, _cmbSearchType, lbl, txtSearch, localBtn, btnCsv });
 
-        lvResults = new ListView
+        lvResults = new ThemedListView
         {
             Dock = DockStyle.Fill,
             View = View.Details,
@@ -307,13 +683,14 @@ public sealed class MainForm : Form
         lvResults.Columns.Add("Valor", 400);
         var localResults = lvResults;
         lvResults.DoubleClick += (_, _) => JumpToResult(localResults);
+        _filterResults = AddFilter(bar, lvResults, page);
 
         var hint = new Label
         {
             Dock = DockStyle.Bottom,
             Height = 22,
             Text = "Doble clic en un resultado para verlo en el visor hexadecimal.",
-            ForeColor = Color.Gray,
+            ForeColor = Color.Gray, Tag = "hint",
             Padding = new Padding(4, 2, 0, 0)
         };
 
@@ -326,8 +703,9 @@ public sealed class MainForm : Form
     private TabPage BuildModulesTab()
     {
         var page = new TabPage("Modulos");
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, WrapContents = true, Padding = new Padding(6, 4, 6, 4) };
 
-        _lvModules = new ListView
+        _lvModules = new ThemedListView
         {
             Dock = DockStyle.Fill,
             View = View.Details,
@@ -340,25 +718,27 @@ public sealed class MainForm : Form
         _lvModules.Columns.Add("Modulo", 180);
         _lvModules.Columns.Add("Ruta", 460);
         _lvModules.DoubleClick += (_, _) => JumpToModule();
+        _filterModules = AddFilter(bar, _lvModules, page);
 
         var hint = new Label
         {
             Dock = DockStyle.Bottom,
             Height = 22,
             Text = "Doble clic en un modulo para ir a su direccion base en el visor hexadecimal.",
-            ForeColor = Color.Gray,
+            ForeColor = Color.Gray, Tag = "hint",
             Padding = new Padding(4, 2, 0, 0)
         };
 
         page.Controls.Add(_lvModules);
         page.Controls.Add(hint);
+        page.Controls.Add(bar);
         return page;
     }
 
     private TabPage BuildPointersTab()
     {
         var page = new TabPage("Punteros");
-        var bar = new Panel { Dock = DockStyle.Top, Height = 66 };
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 72, WrapContents = true, Padding = new Padding(6, 4, 6, 4) };
 
         var lblT = new Label { Text = "Objetivo (hex):", Left = 4, Top = 9, Width = 100 };
         _ptrTarget = new TextBox { Left = 106, Top = 6, Width = 160, Font = Mono };
@@ -379,7 +759,7 @@ public sealed class MainForm : Form
             lblT, _ptrTarget, lblD, _ptrDepth, lblO, _ptrMaxOff, btnScan, btnOne, btnStop
         });
 
-        _lvPointers = new ListView
+        _lvPointers = new ThemedListView
         {
             Dock = DockStyle.Fill,
             View = View.Details,
@@ -390,13 +770,14 @@ public sealed class MainForm : Form
         _lvPointers.Columns.Add("Ruta / direccion", 640);
         _lvPointers.Columns.Add("Base / modulo", 220);
         _lvPointers.DoubleClick += (_, _) => ResolveSelectedPointer();
+        _filterPointers = AddFilter(bar, _lvPointers, page);
 
         var hint = new Label
         {
             Dock = DockStyle.Bottom,
             Height = 22,
             Text = "Doble clic en una ruta para resolverla en vivo y saltar a la direccion final en el visor hex.",
-            ForeColor = Color.Gray,
+            ForeColor = Color.Gray, Tag = "hint",
             Padding = new Padding(4, 2, 0, 0)
         };
 
@@ -409,10 +790,10 @@ public sealed class MainForm : Form
     private TabPage BuildScanTab()
     {
         var page = new TabPage("Escaneo");
-        var bar = new Panel { Dock = DockStyle.Top, Height = 66 };
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 72, WrapContents = true, Padding = new Padding(6, 4, 6, 4) };
 
         var lblType = new Label { Text = "Tipo:", Left = 4, Top = 9, Width = 38 };
-        _cmbScanType = new ComboBox { Left = 44, Top = 6, Width = 90, DropDownStyle = ComboBoxStyle.DropDownList };
+        _cmbScanType = new ThemedComboBox { Left = 44, Top = 6, Width = 90, DropDownStyle = ComboBoxStyle.DropDownList };
         _cmbScanType.Items.AddRange(new object[] { "Int32", "Int64", "Float", "Double" });
         _cmbScanType.SelectedIndex = 0;
 
@@ -423,7 +804,7 @@ public sealed class MainForm : Form
         btnFirst.Click += (_, _) => _ = DoFirstScanAsync();
 
         var lblF = new Label { Text = "Filtro:", Left = 142, Top = 38, Width = 45 };
-        _cmbScanFilter = new ComboBox { Left = 188, Top = 35, Width = 130, DropDownStyle = ComboBoxStyle.DropDownList };
+        _cmbScanFilter = new ThemedComboBox { Left = 188, Top = 35, Width = 130, DropDownStyle = ComboBoxStyle.DropDownList };
         _cmbScanFilter.Items.AddRange(new object[] { "Exacto", "Cambio", "No cambio", "Aumento", "Disminuyo" });
         _cmbScanFilter.SelectedIndex = 1;
         var btnNext = new Button { Text = "Siguiente escaneo", Left = 324, Top = 34, Width = 150 };
@@ -436,7 +817,7 @@ public sealed class MainForm : Form
             lblType, _cmbScanType, lblVal, _txtScanValue, btnFirst, lblF, _cmbScanFilter, btnNext, btnStop
         });
 
-        _lvScan = new ListView
+        _lvScan = new ThemedListView
         {
             Dock = DockStyle.Fill,
             View = View.Details,
@@ -448,13 +829,14 @@ public sealed class MainForm : Form
         _lvScan.Columns.Add("Valor", 160);
         _lvScan.Columns.Add("Base / modulo", 260);
         _lvScan.DoubleClick += (_, _) => JumpFromScan();
+        _filterScan = AddFilter(bar, _lvScan, page);
 
         var hint = new Label
         {
             Dock = DockStyle.Bottom,
             Height = 22,
             Text = "Doble clic: manda la direccion al visor hex y a la pestana Punteros como objetivo.",
-            ForeColor = Color.Gray,
+            ForeColor = Color.Gray, Tag = "hint",
             Padding = new Padding(4, 2, 0, 0)
         };
 
@@ -467,7 +849,7 @@ public sealed class MainForm : Form
     private TabPage BuildDisasmTab()
     {
         var page = new TabPage("Desensamblado");
-        var bar = new Panel { Dock = DockStyle.Top, Height = 34 };
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, WrapContents = true, Padding = new Padding(6, 4, 6, 4) };
 
         var lblA = new Label { Text = "Direccion (hex):", Left = 4, Top = 9, Width = 100 };
         _disasmAddr = new TextBox { Left = 106, Top = 6, Width = 160, Font = Mono };
@@ -486,6 +868,7 @@ public sealed class MainForm : Form
             ScrollBars = ScrollBars.Both,
             WordWrap = false,
             Font = Mono,
+            Tag = "keepdark",
             BackColor = Color.FromArgb(24, 24, 24),
             ForeColor = Color.FromArgb(220, 220, 180)
         };
@@ -498,12 +881,12 @@ public sealed class MainForm : Form
     private TabPage BuildThreadsTab()
     {
         var page = new TabPage("Hilos");
-        var bar = new Panel { Dock = DockStyle.Top, Height = 34 };
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, WrapContents = true, Padding = new Padding(6, 4, 6, 4) };
         var btnGo = new Button { Text = "Listar hilos", Left = 4, Top = 4, Width = 120 };
         btnGo.Click += (_, _) => ListThreads();
         bar.Controls.Add(btnGo);
 
-        _lvThreads = new ListView
+        _lvThreads = new ThemedListView
         {
             Dock = DockStyle.Fill,
             View = View.Details,
@@ -516,13 +899,14 @@ public sealed class MainForm : Form
         _lvThreads.Columns.Add("Modulo de inicio", 260);
         _lvThreads.Columns.Add("Prioridad", 80);
         _lvThreads.DoubleClick += (_, _) => JumpFromThread();
+        _filterThreads = AddFilter(bar, _lvThreads, page);
 
         var hint = new Label
         {
             Dock = DockStyle.Bottom,
             Height = 22,
             Text = "Un inicio '(dinamica)' fuera de todo modulo puede indicar codigo inyectado. Doble clic para verlo.",
-            ForeColor = Color.Gray,
+            ForeColor = Color.Gray, Tag = "hint",
             Padding = new Padding(4, 2, 0, 0)
         };
 
@@ -535,7 +919,7 @@ public sealed class MainForm : Form
     private TabPage BuildSecurityTab()
     {
         var page = new TabPage("Seguridad");
-        var bar = new Panel { Dock = DockStyle.Top, Height = 34 };
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, WrapContents = true, Padding = new Padding(6, 4, 6, 4) };
 
         var btnGo = new Button { Text = "Analizar seguridad", Left = 4, Top = 4, Width = 150 };
         btnGo.Click += (_, _) => _ = DoSecurityAnalysisAsync();
@@ -546,7 +930,7 @@ public sealed class MainForm : Form
 
         bar.Controls.AddRange(new Control[] { btnGo, btnStop, btnCsv });
 
-        _lvSecurity = new ListView
+        _lvSecurity = new ThemedListView
         {
             Dock = DockStyle.Fill,
             View = View.Details,
@@ -558,13 +942,14 @@ public sealed class MainForm : Form
         _lvSecurity.Columns.Add("Categoria", 180);
         _lvSecurity.Columns.Add("Detalle", 560);
         _lvSecurity.DoubleClick += (_, _) => JumpFromSecurity();
+        _filterSecurity = AddFilter(bar, _lvSecurity, page);
 
         var hint = new Label
         {
             Dock = DockStyle.Bottom,
             Height = 22,
             Text = "Deteccion de indicadores (RWX, ejecutable no respaldado, modulos sin ASLR/DEP/CFG). Doble clic para ver la direccion.",
-            ForeColor = Color.Gray,
+            ForeColor = Color.Gray, Tag = "hint",
             Padding = new Padding(4, 2, 0, 0)
         };
 
@@ -577,7 +962,7 @@ public sealed class MainForm : Form
     private TabPage BuildStringsTab()
     {
         var page = new TabPage("Strings");
-        var bar = new Panel { Dock = DockStyle.Top, Height = 34 };
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, WrapContents = true, Padding = new Padding(6, 4, 6, 4) };
 
         var lbl = new Label { Text = "Long. min:", Left = 4, Top = 9, Width = 70 };
         _txtMinLen = new TextBox { Left = 76, Top = 6, Width = 50, Text = "5", Font = Mono };
@@ -590,7 +975,7 @@ public sealed class MainForm : Form
 
         bar.Controls.AddRange(new Control[] { lbl, _txtMinLen, btnGo, btnStop, btnCsv });
 
-        _lvStrings = new ListView
+        _lvStrings = new ThemedListView
         {
             Dock = DockStyle.Fill,
             View = View.Details,
@@ -602,13 +987,14 @@ public sealed class MainForm : Form
         _lvStrings.Columns.Add("Cod.", 70);
         _lvStrings.Columns.Add("Texto", 620);
         _lvStrings.DoubleClick += (_, _) => JumpToString();
+        _filterStrings = AddFilter(bar, _lvStrings, page);
 
         var hint = new Label
         {
             Dock = DockStyle.Bottom,
             Height = 22,
             Text = "Doble clic en una cadena para verla en el visor hexadecimal.",
-            ForeColor = Color.Gray,
+            ForeColor = Color.Gray, Tag = "hint",
             Padding = new Padding(4, 2, 0, 0)
         };
 
@@ -691,8 +1077,14 @@ public sealed class MainForm : Form
 
             EnumerateRegions();
             LoadModules();
+
+            // Identificador + tabla de etiquetas de este proceso (por nombre).
+            _identifier = new Identifier(_scanner!, _reader, _store);
+            _store.LoadForProcess(name); // dispara RefreshLabelsList via Changed
+
             _txtHex.Text = string.Empty;
             _txtInterp.Text = string.Empty;
+            _lblIdentity.Text = "Identidad: lee una direccion para identificarla.";
             _lvResults.Items.Clear();
             _lvPointers.Items.Clear();
             _lvStrings.Items.Clear();
@@ -700,11 +1092,13 @@ public sealed class MainForm : Form
             _lvSecurity.Items.Clear();
             _lvThreads.Items.Clear();
             _scanSession = null;
+            UpdateTimerState();
         }
         catch (Win32Exception ex)
         {
             _reader = null;
             _scanner = null;
+            _identifier = null;
             _scanSession = null;
             _lblProcess.Text = "Ningun proceso abierto.";
             _lvRegions.Items.Clear();
@@ -714,6 +1108,7 @@ public sealed class MainForm : Form
             _lvScan.Items.Clear();
             _lvSecurity.Items.Clear();
             _lvThreads.Items.Clear();
+            _lvLabels.Items.Clear();
             MessageBox.Show(ex.Message, "No se pudo abrir el proceso",
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
             _status.Text = $"Fallo al abrir PID {pid}.";
@@ -791,6 +1186,7 @@ public sealed class MainForm : Form
             byte[] data = _reader.ReadBytes(address, size);
             _txtHex.Text = HexFormatter.Format(data, address);
             _txtInterp.Text = ValueInterpreter.Describe(data);
+            UpdateIdentityPanel(address);
             _status.Text = $"Leidos {data.Length} bytes desde 0x{address:X}.";
         }
         catch (Win32Exception ex)
@@ -875,6 +1271,7 @@ public sealed class MainForm : Form
                 _lvResults.Items.Add(item);
             }
             _lvResults.EndUpdate();
+            _filterResults?.Reset();
             _status.Text = hits.Count >= maxHits
                 ? $"Busqueda detenida al alcanzar {maxHits} coincidencias."
                 : $"Busqueda finalizada: {hits.Count} coincidencias.";
@@ -964,6 +1361,7 @@ public sealed class MainForm : Form
         finally
         {
             _lvModules.EndUpdate();
+            _filterModules?.Reset();
         }
     }
 
@@ -1090,20 +1488,13 @@ public sealed class MainForm : Form
 
     private void ToggleAutoRefresh()
     {
-        if (_chkAutoRefresh.Checked)
+        if (_chkAutoRefresh.Checked && _reader == null)
         {
-            if (_reader == null)
-            {
-                _chkAutoRefresh.Checked = false;
-                _status.Text = "Abre un proceso primero.";
-                return;
-            }
-            _refreshTimer.Start();
+            _chkAutoRefresh.Checked = false;
+            _status.Text = "Abre un proceso primero.";
+            return;
         }
-        else
-        {
-            _refreshTimer.Stop();
-        }
+        UpdateTimerState();
     }
 
     // ---------------- Punteros / offsets ----------------
@@ -1137,6 +1528,7 @@ public sealed class MainForm : Form
                 _lvPointers.Items.Add(it);
             }
             _lvPointers.EndUpdate();
+            _filterPointers?.Reset();
             _status.Text = $"{paths.Count} rutas de puntero (indice: {scanner.IndexCount:N0} punteros, tam. {scanner.PointerSize} bytes).";
         }
         catch (OperationCanceledException) { _status.Text = "Escaneo cancelado."; }
@@ -1175,6 +1567,7 @@ public sealed class MainForm : Form
                 _lvPointers.Items.Add(it);
             }
             _lvPointers.EndUpdate();
+            _filterPointers?.Reset();
             _status.Text = $"{hits.Count} punteros apuntan cerca de 0x{target:X} (mostrando hasta 5000).";
         }
         catch (OperationCanceledException) { _status.Text = "Cancelado."; }
@@ -1272,6 +1665,7 @@ public sealed class MainForm : Form
             _lvScan.Items.Add(it);
         }
         _lvScan.EndUpdate();
+        _filterScan?.Reset();
     }
 
     private void JumpFromScan()
@@ -1314,7 +1708,7 @@ public sealed class MainForm : Form
                 var it = _lvRegions.Items[i];
                 if (it.SubItems.Count > 4)
                     it.SubItems[4].Text = vals[i] >= 0 ? vals[i].ToString("0.00") : "-";
-                if (vals[i] >= 7.2) it.ForeColor = Color.Firebrick; // posible empaquetado/cifrado
+                if (vals[i] >= 7.2) it.ForeColor = ThemeManager.Current.SeverityHigh; // posible empaquetado/cifrado
             }
             _status.Text = "Entropia calculada (rojo = >7.2, posible empaquetado/cifrado).";
         }
@@ -1337,7 +1731,7 @@ public sealed class MainForm : Form
                 it.SubItems.Add("0x" + t.StartAddress.ToString("X"));
                 var mod = _scanner?.ResolveModuleOffset(t.StartAddress);
                 string modText = mod != null ? $"{mod.Value.mod.Name}+0x{mod.Value.offset:X}" : "(dinamica)";
-                if (mod == null && t.StartAddress != 0) it.ForeColor = Color.Firebrick;
+                if (mod == null && t.StartAddress != 0) it.ForeColor = ThemeManager.Current.SeverityHigh;
                 it.SubItems.Add(modText);
                 it.SubItems.Add(t.BasePriority.ToString());
                 _lvThreads.Items.Add(it);
@@ -1345,7 +1739,7 @@ public sealed class MainForm : Form
             _status.Text = $"{threads.Count} hilos.";
         }
         catch (Exception ex) { _status.Text = "Error: " + ex.Message; }
-        finally { _lvThreads.EndUpdate(); }
+        finally { _lvThreads.EndUpdate(); _filterThreads?.Reset(); }
     }
 
     private void JumpFromThread()
@@ -1402,11 +1796,12 @@ public sealed class MainForm : Form
                 var it = new ListViewItem(f.Severity) { Tag = f.Address };
                 it.SubItems.Add(f.Category);
                 it.SubItems.Add(f.Detail);
-                if (f.Severity == "Alta") it.ForeColor = Color.Firebrick;
-                else if (f.Severity == "Media") it.ForeColor = Color.DarkGoldenrod;
+                if (f.Severity == "Alta") it.ForeColor = ThemeManager.Current.SeverityHigh;
+                else if (f.Severity == "Media") it.ForeColor = ThemeManager.Current.SeverityMedium;
                 _lvSecurity.Items.Add(it);
             }
             _lvSecurity.EndUpdate();
+            _filterSecurity?.Reset();
             int alta = findings.Count(x => x.Severity == "Alta");
             _status.Text = $"{findings.Count} hallazgos ({alta} de severidad alta).";
         }
@@ -1479,6 +1874,7 @@ public sealed class MainForm : Form
                 _lvStrings.Items.Add(it);
             }
             _lvStrings.EndUpdate();
+            _filterStrings?.Reset();
             _status.Text = strings.Count >= maxResults
                 ? $"Extraccion detenida en {maxResults:N0} cadenas."
                 : $"{strings.Count:N0} cadenas extraidas.";
@@ -1567,12 +1963,12 @@ public sealed class MainForm : Form
 
         if (elevated)
         {
-            _lblAdmin.ForeColor = Color.DarkGreen;
+            _lblAdmin.ForeColor = ThemeManager.Current.OkText;
             _lblAdmin.Text = "Ejecutando como Administrador.";
         }
         else
         {
-            _lblAdmin.ForeColor = Color.DarkRed;
+            _lblAdmin.ForeColor = ThemeManager.Current.BadText;
             _lblAdmin.Text = "SIN privilegios de Administrador: la mayoria de procesos no se podran abrir.";
         }
     }
