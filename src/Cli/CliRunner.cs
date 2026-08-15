@@ -69,6 +69,8 @@ internal static class CliRunner
                     return CmdSearch(opts, elevated);
                 case "pe":
                     return CmdPe(opts, elevated);
+                case "integrity":
+                    return CmdIntegrity(opts, elevated);
                 default:
                     Console.Error.WriteLine(
                         $"Verbo desconocido: '{verb}'. Ejecuta 'MemReader.exe help' para ver el uso.");
@@ -358,6 +360,28 @@ internal static class CliRunner
         return 0;
     }
 
+    private static int CmdIntegrity(Dictionary<string, string> opts, bool elevated)
+    {
+        int pid = RequirePid(opts);
+        WarnIfNotElevated(elevated);
+        using var reader = new ProcessMemoryReader(pid);
+        var progress = Progress(opts);
+        var results = IntegrityScanner.Scan(reader, progress, CancellationToken.None);
+        EndProgress();
+
+        var sb = new StringBuilder();
+        sb.AppendLine("module,base,verdict,diff_pct,compared_bytes,detail");
+        foreach (var r in results)
+            sb.AppendLine($"{Csv(r.Name)},{r.BaseText},{r.Verdict},{r.DiffPercent:0.####},{r.ComparedBytes},{Csv(r.Detail)}");
+        WriteOutput(sb.ToString(), Get(opts, "out"));
+
+        int susp = results.Count(r => r.Verdict == "SOSPECHOSO");
+        Console.Error.WriteLine($"{results.Count} modulos comprobados ({susp} sospechosos).");
+        foreach (var r in results.Where(r => r.Verdict == "SOSPECHOSO"))
+            Console.Error.WriteLine($"  ! {r.Name}: {r.Detail}");
+        return 0;
+    }
+
     private static int PrintHelp()
     {
         Console.WriteLine(
@@ -393,6 +417,8 @@ VERBOS:
   pe        --pid <N> [--base <hex>] [--out <archivo.csv>]
             Analiza el PE (secciones, imports, exports, TLS, anomalias).
             Sin --base usa el modulo principal.
+  integrity --pid <N> [--out <archivo.csv>]
+            Compara el codigo en memoria vs el archivo en disco (hollowing/hooks).
   version   Muestra la version.
   help      Muestra esta ayuda.
 

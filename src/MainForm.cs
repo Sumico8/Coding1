@@ -60,6 +60,8 @@ public sealed class MainForm : Form
     private TextBox _peAddr = null!;
     private ListView _lvPeSections = null!;
     private TextBox _txtPeInfo = null!;
+    private ListView _lvIntegrity = null!;
+    private CancellationTokenSource? _integCts;
     private readonly System.Windows.Forms.Timer _refreshTimer;
 
     private ProcessMemoryReader? _reader;
@@ -169,6 +171,7 @@ public sealed class MainForm : Form
         tabs.TabPages.Add(BuildHashesTab());
         tabs.TabPages.Add(BuildIocTab());
         tabs.TabPages.Add(BuildPeTab());
+        tabs.TabPages.Add(BuildIntegrityTab());
         tabs.TabPages.Add(BuildInformeTab());
         split2.Panel2.Controls.Add(tabs);
 
@@ -213,6 +216,7 @@ public sealed class MainForm : Form
             _reportCts?.Cancel();
             _hashCts?.Cancel();
             _iocCts?.Cancel();
+            _integCts?.Cancel();
             _reader?.Dispose();
         };
     }
@@ -800,6 +804,48 @@ public sealed class MainForm : Form
 
         page.Controls.Add(_lvPeSections);
         page.Controls.Add(_txtPeInfo);
+        page.Controls.Add(bar);
+        return page;
+    }
+
+    private TabPage BuildIntegrityTab()
+    {
+        var page = new TabPage("Integridad");
+        var bar = new Panel { Dock = DockStyle.Top, Height = 34 };
+        var btnGo = new Button { Text = "Comprobar integridad", Left = 4, Top = 4, Width = 170 };
+        btnGo.Click += (_, _) => _ = DoIntegrityAsync();
+        var btnStop = new Button { Text = "Detener", Left = 180, Top = 4, Width = 80 };
+        btnStop.Click += (_, _) => _integCts?.Cancel();
+        var btnCsv = new Button { Text = "Exportar CSV...", Left = 266, Top = 4, Width = 120 };
+        btnCsv.Click += (_, _) => ExportIntegrityCsv();
+        bar.Controls.AddRange(new Control[] { btnGo, btnStop, btnCsv });
+
+        _lvIntegrity = new ListView
+        {
+            Dock = DockStyle.Fill,
+            View = View.Details,
+            FullRowSelect = true,
+            GridLines = true,
+            MultiSelect = false
+        };
+        _lvIntegrity.Columns.Add("Modulo", 170);
+        _lvIntegrity.Columns.Add("Base", 130);
+        _lvIntegrity.Columns.Add("Veredicto", 100);
+        _lvIntegrity.Columns.Add("Diff %", 80);
+        _lvIntegrity.Columns.Add("Detalle", 460);
+        _lvIntegrity.DoubleClick += (_, _) => JumpFromIntegrity();
+
+        var hint = new Label
+        {
+            Dock = DockStyle.Bottom,
+            Height = 22,
+            Text = "Compara el codigo en memoria con el archivo en disco (con relocations aplicadas). SOSPECHOSO = posible hollowing/parcheo.",
+            ForeColor = Color.Gray,
+            Padding = new Padding(4, 2, 0, 0)
+        };
+
+        page.Controls.Add(_lvIntegrity);
+        page.Controls.Add(hint);
         page.Controls.Add(bar);
         return page;
     }
@@ -2033,6 +2079,76 @@ public sealed class MainForm : Form
         ReadHexAtAddress();
         if (_txtHex.Parent is TabPage page && page.Parent is TabControl tc)
             tc.SelectedTab = page;
+    }
+
+    // ---------------- Integridad de modulos ----------------
+
+    private async Task DoIntegrityAsync()
+    {
+        if (_reader == null) { _status.Text = "Abre un proceso primero."; return; }
+        _lvIntegrity.Items.Clear();
+        _integCts = new CancellationTokenSource();
+        var ct = _integCts.Token;
+        var reader = _reader;
+        var progress = new Progress<string>(m => _status.Text = m);
+        try
+        {
+            var results = await Task.Run(() => IntegrityScanner.Scan(reader, progress, ct), ct);
+            _lvIntegrity.BeginUpdate();
+            foreach (var r in results)
+            {
+                var it = new ListViewItem(r.Name) { Tag = r.BaseAddress };
+                it.SubItems.Add(r.BaseText);
+                it.SubItems.Add(r.Verdict);
+                it.SubItems.Add(r.DiffPercent > 0 ? r.DiffPercent.ToString("0.####") : (r.Verdict == "OK" ? "0" : "-"));
+                it.SubItems.Add(r.Detail);
+                if (r.Verdict == "SOSPECHOSO") it.ForeColor = Color.Firebrick;
+                else if (r.Verdict == "menor") it.ForeColor = Color.DarkGoldenrod;
+                _lvIntegrity.Items.Add(it);
+            }
+            _lvIntegrity.EndUpdate();
+            int susp = results.Count(x => x.Verdict == "SOSPECHOSO");
+            _status.Text = $"{results.Count} modulos comprobados ({susp} sospechosos).";
+        }
+        catch (OperationCanceledException) { _status.Text = "Comprobacion cancelada."; }
+        catch (Exception ex) { _status.Text = "Error: " + ex.Message; }
+        finally { _integCts?.Dispose(); _integCts = null; }
+    }
+
+    private void JumpFromIntegrity()
+    {
+        if (_reader == null || _lvIntegrity.SelectedItems.Count == 0) return;
+        ulong addr = (ulong)_lvIntegrity.SelectedItems[0].Tag!;
+        _txtAddress.Text = "0x" + addr.ToString("X");
+        _txtSize.Text = "256";
+        ReadHexAtAddress();
+        if (_txtHex.Parent is TabPage page && page.Parent is TabControl tc)
+            tc.SelectedTab = page;
+    }
+
+    private void ExportIntegrityCsv()
+    {
+        if (_lvIntegrity.Items.Count == 0) { _status.Text = "No hay resultados que exportar."; return; }
+        using var sfd = new SaveFileDialog
+        {
+            Title = "Guardar informe de integridad",
+            FileName = "integridad.csv",
+            Filter = "CSV (*.csv)|*.csv|Todos los archivos (*.*)|*.*"
+        };
+        if (sfd.ShowDialog(this) != DialogResult.OK) return;
+        try
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("modulo,base,veredicto,diff_pct,detalle");
+            foreach (ListViewItem it in _lvIntegrity.Items)
+            {
+                string det = it.SubItems[4].Text.Replace("\"", "\"\"");
+                sb.AppendLine($"{it.Text},{it.SubItems[1].Text},{it.SubItems[2].Text},{it.SubItems[3].Text},\"{det}\"");
+            }
+            File.WriteAllText(sfd.FileName, sb.ToString());
+            _status.Text = "Guardado en " + sfd.FileName;
+        }
+        catch (Exception ex) { _status.Text = "Error al guardar: " + ex.Message; }
     }
 
     // ---------------- Utilidades ----------------
