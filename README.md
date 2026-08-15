@@ -66,6 +66,12 @@ de escritorio (WinForms, .NET 8) que:
 - **Triage de toda la máquina**: recorre los procesos accesibles y los ordena por
   sospecha (regiones RWX, ejecutable no respaldado, hilos con inicio anómalo).
 - **Búsqueda AOB con comodines**: patrones de bytes tipo `48 8B ?? ?? E8`.
+- **Contexto del proceso**: línea de comandos, PID padre (cadena padre-hijo),
+  sesión y hora de inicio — IOCs de primer nivel para triage.
+- **Nivel de protección y mitigaciones**: PPL/Protected y su firmante, más CFG,
+  ACG y "solo firmado por Microsoft"; explica por qué un proceso no se puede abrir.
+- **Bundle del caso (.zip)**: empaqueta el informe (HTML + JSON con hashes e IOCs),
+  un minidump y el índice de regiones en un único `.zip` listo para archivar.
 - **Modo CLI headless** para automatizar todo lo anterior por línea de comandos.
 
 Todo se apoya en APIs **documentadas y soportadas** de Windows
@@ -163,6 +169,8 @@ MemReader.exe handles   --pid <N> [--no-names] [--out handles.csv]
 MemReader.exe hashes    --pid <N> [--out hashes.csv]
 MemReader.exe search    --pid <N> --aob "48 8B ?? E8" [--out hits.csv]
 MemReader.exe scan-all  [--filter <txt>] [--out maquina.csv]
+MemReader.exe info      --pid <N> [--out info.csv]
+MemReader.exe bundle    --pid <N> [--out caso.zip] [--full]
 MemReader.exe dump      --pid <N> --out <carpeta>
 MemReader.exe minidump  --pid <N> [--out pid.dmp]
 MemReader.exe help
@@ -258,6 +266,8 @@ src/ModuleHasher.cs           SHA-256 de módulos + URL de VirusTotal
 src/IocExtractor.cs           Extracción de IOCs
 src/SnapshotDiff.cs           Diff de capturas de memoria
 src/BatchTriage.cs            Triage ligero de toda la máquina
+src/ProcessInfo.cs            Contexto del proceso (cmdline, padre, protección)
+src/CaseBundle.cs             Bundle del caso en .zip (informe + dump + regiones)
 src/Report/                   Informe de triage (modelo + HTML + JSON)
 src/Cli/CliRunner.cs          Modo CLI headless (automatización)
 src/HexFormatter.cs           Volcado hexadecimal
