@@ -666,7 +666,9 @@ public sealed class MainForm : Form
         btnGo.Click += (_, _) => _ = DoReportAsync();
         var btnStop = new Button { Text = "Detener", Left = 230, Top = 4, Width = 80 };
         btnStop.Click += (_, _) => _reportCts?.Cancel();
-        bar.Controls.AddRange(new Control[] { btnGo, btnStop });
+        var btnBundle = new Button { Text = "Bundle del caso (.zip)...", Left = 316, Top = 4, Width = 190 };
+        btnBundle.Click += (_, _) => _ = DoBundleAsync();
+        bar.Controls.AddRange(new Control[] { btnGo, btnStop, btnBundle });
 
         _txtReport = new TextBox
         {
@@ -2049,6 +2051,32 @@ public sealed class MainForm : Form
         }
         catch (OperationCanceledException) { _status.Text = "Informe cancelado."; _txtReport.Text = string.Empty; }
         catch (Exception ex) { _status.Text = "Error al generar el informe: " + ex.Message; }
+        finally { _reportCts?.Dispose(); _reportCts = null; }
+    }
+
+    private async Task DoBundleAsync()
+    {
+        if (_reader == null) { _status.Text = "Abre un proceso primero."; return; }
+        int pid = _reader.ProcessId;
+        using var sfd = new SaveFileDialog
+        {
+            Title = "Guardar bundle del caso (informe + minidump + regiones)",
+            FileName = $"caso_pid{pid}.zip",
+            Filter = "ZIP (*.zip)|*.zip|Todos los archivos (*.*)|*.*"
+        };
+        if (sfd.ShowDialog(this) != DialogResult.OK) return;
+        string outPath = sfd.FileName;
+
+        _reportCts = new CancellationTokenSource();
+        var ct = _reportCts.Token;
+        var progress = new Progress<string>(m => _status.Text = m);
+        try
+        {
+            string result = await Task.Run(() => CaseBundle.Create(pid, outPath, false, progress, ct), ct);
+            _status.Text = $"Bundle del caso guardado: {result}";
+        }
+        catch (OperationCanceledException) { _status.Text = "Bundle cancelado."; }
+        catch (Exception ex) { _status.Text = "Error al generar el bundle: " + ex.Message; }
         finally { _reportCts?.Dispose(); _reportCts = null; }
     }
 

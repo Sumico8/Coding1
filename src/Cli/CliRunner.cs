@@ -80,6 +80,8 @@ internal static class CliRunner
                     return CmdScanAll(opts, elevated);
                 case "info":
                     return CmdInfo(opts, elevated);
+                case "bundle":
+                    return CmdBundle(opts, elevated);
                 default:
                     Console.Error.WriteLine(
                         $"Verbo desconocido: '{verb}'. Ejecuta 'MemReader.exe help' para ver el uso.");
@@ -473,6 +475,20 @@ internal static class CliRunner
         return 0;
     }
 
+    private static int CmdBundle(Dictionary<string, string> opts, bool elevated)
+    {
+        int pid = RequirePid(opts);
+        WarnIfNotElevated(elevated);
+        string outPath = Get(opts, "out") ?? $"caso_pid{pid}.zip";
+        bool full = opts.ContainsKey("full");
+        var progress = Progress(opts);
+        string result = CaseBundle.Create(pid, outPath, full, progress, CancellationToken.None);
+        EndProgress();
+        var fi = new FileInfo(result);
+        Console.Error.WriteLine($"Bundle del caso: {result} ({fi.Length} bytes).");
+        return 0;
+    }
+
     private static int PrintHelp()
     {
         Console.WriteLine(
@@ -518,6 +534,9 @@ VERBOS:
             Triage ligero de todos los procesos, ordenados por sospecha.
   info      --pid <N> [--out <archivo.csv>]
             Linea de comandos, PID padre, sesion y hora de inicio.
+  bundle    --pid <N> [--out <caso.zip>] [--full]
+            Empaqueta informe + minidump + indice de regiones en un .zip.
+            --full incluye un minidump de memoria completa (grande).
   version   Muestra la version.
   help      Muestra esta ayuda.
 
