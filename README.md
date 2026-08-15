@@ -41,10 +41,39 @@ de escritorio (WinForms, .NET 8) que:
   (con índice) para análisis forense en tu laboratorio.
 - **Export a minidump `.dmp`** (memoria completa) compatible con WinDbg — la misma
   capacidad que "Crear archivo de volcado" del Administrador de tareas.
+- **Informe de triage (HTML + JSON)**: genera de un tirón un informe con los
+  metadatos del proceso, resumen de regiones, regiones de alta entropía,
+  indicadores de seguridad, hilos sospechosos, módulos e IOCs. Pensado como
+  entregable de pentest/DFIR.
+- **Extractor de IOCs**: saca IPs, URLs, dominios, correos, rutas de Windows/UNC,
+  claves de registro y GUIDs de la memoria, deduplicados y con su dirección.
+- **Análisis PE en memoria**: secciones (con entropía por sección), imports,
+  exports, TLS callbacks y anomalías de cabecera; incluye un escáner de imágenes
+  `MZ` mapeadas que detecta módulos mapeados manualmente que el cargador no lista.
+- **Integridad de módulos (anti-hollowing)**: compara el código en memoria con el
+  archivo en disco (aplicando las relocations a una copia propia, para no confundir
+  ASLR con manipulación) y marca posibles parches o *process hollowing*.
+- **Detección de hooks inline**: marca los exports de `ntdll`/`kernel32`/… cuyo
+  prólogo empieza con un salto (hook de EDR/AV o inyección), resolviendo a qué
+  módulo apuntan. Es solo detección: no quita hooks ni "limpia" DLLs.
+- **Hashing de módulos**: SHA-256 del archivo en disco de cada módulo, con URL de
+  VirusTotal copiable (sin conexiones de red automáticas).
+- **Enumeración de handles**: ficheros, claves, *mutex* y eventos que abre el
+  proceso; los nombres de mutex/evento con nombre son IOCs muy útiles.
+- **Diff de snapshots**: captura una zona de memoria en dos momentos y resalta los
+  bytes que cambiaron (útil para observar un valor en vivo o cómo se desempaqueta
+  código).
+- **Triage de toda la máquina**: recorre los procesos accesibles y los ordena por
+  sospecha (regiones RWX, ejecutable no respaldado, hilos con inicio anómalo).
+- **Búsqueda AOB con comodines**: patrones de bytes tipo `48 8B ?? ?? E8`.
+- **Modo CLI headless** para automatizar todo lo anterior por línea de comandos.
 
 Todo se apoya en APIs **documentadas y soportadas** de Windows
-(`OpenProcess`, `VirtualQueryEx`, `ReadProcessMemory`). No modifica la memoria de
-otros procesos: solo la lee.
+(`OpenProcess`, `VirtualQueryEx`, `ReadProcessMemory`, `NtQuerySystemInformation`…).
+No modifica la memoria de otros procesos: solo la lee. La única ampliación sobre el
+acceso mínimo de solo lectura es un handle aparte con `PROCESS_DUP_HANDLE` que se
+abre **solo** para la función de enumerar handles (duplicar y consultar tipo/nombre);
+nunca se pide acceso de escritura a la memoria del proceso.
 
 ---
 
@@ -107,6 +136,50 @@ formas de descargarlo ya hecho:
 
 Si prefieres compilarlo tú mismo, sigue las secciones de abajo.
 
+## Modo CLI (automatización)
+
+Además de la interfaz gráfica, MemReader tiene un **modo de línea de comandos**
+(sin ventana) para automatizar el análisis y encadenarlo en scripts. Si le pasas
+argumentos actúa como herramienta de consola; sin argumentos abre la GUI.
+
+> **Ejecútalo desde una consola ya elevada (Administrador).** El ejecutable pide
+> elevación, y lanzarlo sin elevar desde una consola normal rompe la redirección de
+> la salida (UAC abre un proceso nuevo). Por eso los comandos que generan artefactos
+> aceptan `--out <ruta>` para escribir el resultado a un archivo.
+
+Verbos disponibles:
+
+```text
+MemReader.exe list      [--filter <txt>] [--out procs.csv]
+MemReader.exe regions   --pid <N> [--all] [--out regiones.csv]
+MemReader.exe strings   --pid <N> [--min 6] [--out cadenas.csv]
+MemReader.exe security  --pid <N> [--out seguridad.csv]
+MemReader.exe report    --pid <N> [--out informe.html] [--hash] [--ioc]
+MemReader.exe ioc       --pid <N> [--min 5] [--out iocs.csv]
+MemReader.exe pe        --pid <N> [--base 0x...] [--out pe.csv]
+MemReader.exe integrity --pid <N> [--out integridad.csv]
+MemReader.exe hooks     --pid <N> [--out hooks.csv]
+MemReader.exe handles   --pid <N> [--no-names] [--out handles.csv]
+MemReader.exe hashes    --pid <N> [--out hashes.csv]
+MemReader.exe search    --pid <N> --aob "48 8B ?? E8" [--out hits.csv]
+MemReader.exe scan-all  [--filter <txt>] [--out maquina.csv]
+MemReader.exe dump      --pid <N> --out <carpeta>
+MemReader.exe minidump  --pid <N> [--out pid.dmp]
+MemReader.exe help
+```
+
+El comando `report` genera el informe HTML y, junto a él, un `.json` con el mismo
+nombre base. Códigos de salida: `0` ok, `1` error de uso, `2` acceso denegado,
+`3` error.
+
+Ejemplos:
+
+```powershell
+MemReader.exe scan-all --out maquina.csv
+MemReader.exe report --pid 1234 --hash --ioc --out informe.html
+MemReader.exe search --pid 1234 --aob "48 8B ?? ?? E8" --out firmas.csv
+```
+
 ## Requisitos (para compilar en local)
 
 - Windows 10/11 de 64 bits.
@@ -151,8 +224,10 @@ También puedes usar el script incluido:
 
 - El binario se compila como **x64**; el struct `MEMORY_BASIC_INFORMATION` usa el
   layout de 64 bits.
-- Solo se solicitan los permisos `PROCESS_QUERY_INFORMATION | PROCESS_VM_READ`.
-  No se pide acceso de escritura.
+- El lector de memoria solo solicita `PROCESS_QUERY_INFORMATION | PROCESS_VM_READ`.
+  No se pide acceso de escritura. La única excepción es la función de enumerar
+  handles, que abre un handle aparte con `PROCESS_DUP_HANDLE` (necesario para
+  duplicar y consultar el tipo/nombre de cada handle); tampoco escribe nada.
 - Windows **denegará** el acceso a procesos protegidos (PPL) aunque seas
   Administrador. Es el comportamiento correcto y esperado; verás un error Win32
   (normalmente `5 = Acceso denegado`).
@@ -163,12 +238,29 @@ También puedes usar el script incluido:
 .github/workflows/build.yml   Compila el .exe en la nube y lo publica
 MemReader.csproj              Proyecto .NET (WinForms, x64)
 app.manifest                  Solicita elevación (Administrador) + DPI
-src/NativeMethods.cs          P/Invoke a kernel32 (APIs documentadas)
+src/NativeMethods.cs          P/Invoke a kernel32/ntdll (APIs documentadas)
 src/Privileges.cs             Habilita SeDebugPrivilege (advapi32)
 src/ProcessMemoryReader.cs    Núcleo: abrir proceso, enumerar, leer, módulos, dump
 src/PointerScanner.cs         Motor de punteros/offsets (índice, escaneo, resolución)
-src/ValueInterpreter.cs       Interpreta bytes como tipos y construye patrones
+src/ScanSession.cs            Escaneo iterativo de valores (next-scan)
+src/ValueInterpreter.cs       Interpreta bytes como tipos, patrones y AOB
+src/EntropyAnalyzer.cs        Entropía de Shannon por región/sección
+src/StringsExtractor.cs       Extracción de cadenas ASCII/UTF-16
+src/ThreadInspector.cs        Hilos y su dirección de inicio
+src/SecurityAnalyzer.cs       Indicadores de seguridad (RWX, exec no respaldado…)
+src/Disassembler.cs           Desensamblado x86/x64 (Iced) con símbolos
+src/PeImage.cs                Parser PE (secciones, imports/exports/TLS)
+src/PeAnalyzer.cs             Análisis PE en memoria + anomalías
+src/IntegrityScanner.cs       Integridad de módulos (anti-hollowing)
+src/HookScanner.cs            Detección de hooks inline
+src/HandleInspector.cs        Enumeración de handles/mutex
+src/ModuleHasher.cs           SHA-256 de módulos + URL de VirusTotal
+src/IocExtractor.cs           Extracción de IOCs
+src/SnapshotDiff.cs           Diff de capturas de memoria
+src/BatchTriage.cs            Triage ligero de toda la máquina
+src/Report/                   Informe de triage (modelo + HTML + JSON)
+src/Cli/CliRunner.cs          Modo CLI headless (automatización)
 src/HexFormatter.cs           Volcado hexadecimal
 src/MainForm.cs               Interfaz gráfica
-src/Program.cs                Punto de entrada
+src/Program.cs                Punto de entrada (GUI o CLI)
 ```
