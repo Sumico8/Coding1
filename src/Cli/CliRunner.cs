@@ -73,6 +73,8 @@ internal static class CliRunner
                     return CmdIntegrity(opts, elevated);
                 case "hooks":
                     return CmdHooks(opts, elevated);
+                case "handles":
+                    return CmdHandles(opts, elevated);
                 default:
                     Console.Error.WriteLine(
                         $"Verbo desconocido: '{verb}'. Ejecuta 'MemReader.exe help' para ver el uso.");
@@ -402,6 +404,24 @@ internal static class CliRunner
         return 0;
     }
 
+    private static int CmdHandles(Dictionary<string, string> opts, bool elevated)
+    {
+        int pid = RequirePid(opts);
+        WarnIfNotElevated(elevated);
+        bool names = !opts.ContainsKey("no-names");
+        var progress = Progress(opts);
+        var handles = HandleInspector.Enumerate(pid, names, progress, CancellationToken.None);
+        EndProgress();
+
+        var sb = new StringBuilder();
+        sb.AppendLine("type,name,handle,access");
+        foreach (var h in handles)
+            sb.AppendLine($"{Csv(h.Type)},{Csv(h.Name)},{h.HandleText},{h.AccessText}");
+        WriteOutput(sb.ToString(), Get(opts, "out"));
+        Console.Error.WriteLine($"{handles.Count} handles.");
+        return 0;
+    }
+
     private static int PrintHelp()
     {
         Console.WriteLine(
@@ -441,6 +461,8 @@ VERBOS:
             Compara el codigo en memoria vs el archivo en disco (hollowing/hooks).
   hooks     --pid <N> [--out <archivo.csv>]
             Detecta hooks inline en exports de ntdll/kernel32/etc.
+  handles   --pid <N> [--no-names] [--out <archivo.csv>]
+            Lista los handles (ficheros, claves, mutex...) del proceso.
   version   Muestra la version.
   help      Muestra esta ayuda.
 

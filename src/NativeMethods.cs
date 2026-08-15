@@ -167,6 +167,59 @@ internal static class NativeMethods
     [DllImport("kernel32.dll", SetLastError = true)]
     public static extern uint GetFileType(IntPtr hFile);
 
+    // ---- Enumeracion de handles (ntdll + kernel32) ----
+    // Para resolver el TIPO/NOMBRE de los handles de otro proceso hace falta
+    // DuplicateHandle, que exige PROCESS_DUP_HANDLE sobre el objetivo. Es la unica
+    // ampliacion sobre el minimo de solo-lectura, y solo para esta funcion: se abre
+    // un handle aparte y nunca se pide acceso de escritura a la memoria del proceso.
+    public const uint PROCESS_DUP_HANDLE = 0x0040;
+    public const int SystemExtendedHandleInformation = 64;
+    public const int ObjectNameInformation = 1;
+    public const int ObjectTypeInformation = 2;
+    public const uint DUPLICATE_SAME_ACCESS = 0x00000002;
+    public const uint STATUS_INFO_LENGTH_MISMATCH = 0xC0000004;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX
+    {
+        public IntPtr Object;
+        public IntPtr UniqueProcessId;
+        public IntPtr HandleValue;
+        public uint GrantedAccess;
+        public ushort CreatorBackTraceIndex;
+        public ushort ObjectTypeIndex;
+        public uint HandleAttributes;
+        public uint Reserved;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct UNICODE_STRING
+    {
+        public ushort Length;
+        public ushort MaximumLength;
+        public IntPtr Buffer;
+    }
+
+    [DllImport("ntdll.dll")]
+    public static extern uint NtQuerySystemInformation(
+        int systemInformationClass, IntPtr systemInformation,
+        int systemInformationLength, out int returnLength);
+
+    [DllImport("ntdll.dll")]
+    public static extern uint NtQueryObject(
+        IntPtr handle, int objectInformationClass, IntPtr objectInformation,
+        int objectInformationLength, out int returnLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool DuplicateHandle(
+        IntPtr hSourceProcessHandle, IntPtr hSourceHandle, IntPtr hTargetProcessHandle,
+        out IntPtr lpTargetHandle, uint dwDesiredAccess,
+        [MarshalAs(UnmanagedType.Bool)] bool bInheritHandle, uint dwOptions);
+
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr GetCurrentProcess();
+
     /// <summary>Devuelve true si la proteccion de la pagina permite lectura.</summary>
     public static bool IsReadable(uint protect)
     {

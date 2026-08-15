@@ -64,6 +64,9 @@ public sealed class MainForm : Form
     private CancellationTokenSource? _integCts;
     private ListView _lvHooks = null!;
     private CancellationTokenSource? _hookCts;
+    private ListView _lvHandles = null!;
+    private CheckBox _chkResolveNames = null!;
+    private CancellationTokenSource? _handlesCts;
     private readonly System.Windows.Forms.Timer _refreshTimer;
 
     private ProcessMemoryReader? _reader;
@@ -175,6 +178,7 @@ public sealed class MainForm : Form
         tabs.TabPages.Add(BuildPeTab());
         tabs.TabPages.Add(BuildIntegrityTab());
         tabs.TabPages.Add(BuildHooksTab());
+        tabs.TabPages.Add(BuildHandlesTab());
         tabs.TabPages.Add(BuildInformeTab());
         split2.Panel2.Controls.Add(tabs);
 
@@ -221,6 +225,7 @@ public sealed class MainForm : Form
             _iocCts?.Cancel();
             _integCts?.Cancel();
             _hookCts?.Cancel();
+            _handlesCts?.Cancel();
             _reader?.Dispose();
         };
     }
@@ -892,6 +897,47 @@ public sealed class MainForm : Form
         };
 
         page.Controls.Add(_lvHooks);
+        page.Controls.Add(hint);
+        page.Controls.Add(bar);
+        return page;
+    }
+
+    private TabPage BuildHandlesTab()
+    {
+        var page = new TabPage("Handles");
+        var bar = new Panel { Dock = DockStyle.Top, Height = 34 };
+        var btnGo = new Button { Text = "Enumerar handles", Left = 4, Top = 4, Width = 150 };
+        btnGo.Click += (_, _) => _ = DoHandlesAsync();
+        _chkResolveNames = new CheckBox { Text = "Resolver nombres", Left = 160, Top = 7, Width = 140, Checked = true };
+        var btnStop = new Button { Text = "Detener", Left = 306, Top = 4, Width = 80 };
+        btnStop.Click += (_, _) => _handlesCts?.Cancel();
+        var btnCsv = new Button { Text = "Exportar CSV...", Left = 392, Top = 4, Width = 120 };
+        btnCsv.Click += (_, _) => ExportHandlesCsv();
+        bar.Controls.AddRange(new Control[] { btnGo, _chkResolveNames, btnStop, btnCsv });
+
+        _lvHandles = new ListView
+        {
+            Dock = DockStyle.Fill,
+            View = View.Details,
+            FullRowSelect = true,
+            GridLines = true,
+            MultiSelect = false
+        };
+        _lvHandles.Columns.Add("Tipo", 130);
+        _lvHandles.Columns.Add("Nombre", 520);
+        _lvHandles.Columns.Add("Handle", 100);
+        _lvHandles.Columns.Add("Acceso", 100);
+
+        var hint = new Label
+        {
+            Dock = DockStyle.Bottom,
+            Height = 22,
+            Text = "Handles del proceso (ficheros, claves, mutex, eventos...). Los nombres de mutex/evento son IOCs utiles.",
+            ForeColor = Color.Gray,
+            Padding = new Padding(4, 2, 0, 0)
+        };
+
+        page.Controls.Add(_lvHandles);
         page.Controls.Add(hint);
         page.Controls.Add(bar);
         return page;
@@ -2260,6 +2306,63 @@ public sealed class MainForm : Form
             sb.AppendLine("modulo,funcion,direccion,tipo,destino,bytes");
             foreach (ListViewItem it in _lvHooks.Items)
                 sb.AppendLine($"{it.Text},{it.SubItems[1].Text},{it.SubItems[2].Text},{it.SubItems[3].Text},{it.SubItems[4].Text},{it.SubItems[5].Text}");
+            File.WriteAllText(sfd.FileName, sb.ToString());
+            _status.Text = "Guardado en " + sfd.FileName;
+        }
+        catch (Exception ex) { _status.Text = "Error al guardar: " + ex.Message; }
+    }
+
+    // ---------------- Handles ----------------
+
+    private async Task DoHandlesAsync()
+    {
+        if (_reader == null) { _status.Text = "Abre un proceso primero."; return; }
+        int pid = _reader.ProcessId;
+        bool names = _chkResolveNames.Checked;
+        _lvHandles.Items.Clear();
+        _handlesCts = new CancellationTokenSource();
+        var ct = _handlesCts.Token;
+        var progress = new Progress<string>(m => _status.Text = m);
+        try
+        {
+            var handles = await Task.Run(() => HandleInspector.Enumerate(pid, names, progress, ct), ct);
+            _lvHandles.BeginUpdate();
+            foreach (var h in handles)
+            {
+                var it = new ListViewItem(h.Type);
+                it.SubItems.Add(h.Name);
+                it.SubItems.Add(h.HandleText);
+                it.SubItems.Add(h.AccessText);
+                if (h.Type == "Mutant" || h.Type == "Event") it.ForeColor = Color.SteelBlue;
+                _lvHandles.Items.Add(it);
+            }
+            _lvHandles.EndUpdate();
+            _status.Text = $"{handles.Count} handles.";
+        }
+        catch (OperationCanceledException) { _status.Text = "Enumeracion de handles cancelada."; }
+        catch (Exception ex) { _status.Text = "Error: " + ex.Message; }
+        finally { _handlesCts?.Dispose(); _handlesCts = null; }
+    }
+
+    private void ExportHandlesCsv()
+    {
+        if (_lvHandles.Items.Count == 0) { _status.Text = "No hay handles que exportar."; return; }
+        using var sfd = new SaveFileDialog
+        {
+            Title = "Guardar handles",
+            FileName = "handles.csv",
+            Filter = "CSV (*.csv)|*.csv|Todos los archivos (*.*)|*.*"
+        };
+        if (sfd.ShowDialog(this) != DialogResult.OK) return;
+        try
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("tipo,nombre,handle,acceso");
+            foreach (ListViewItem it in _lvHandles.Items)
+            {
+                string nom = it.SubItems[1].Text.Replace("\"", "\"\"");
+                sb.AppendLine($"{it.Text},\"{nom}\",{it.SubItems[2].Text},{it.SubItems[3].Text}");
+            }
             File.WriteAllText(sfd.FileName, sb.ToString());
             _status.Text = "Guardado en " + sfd.FileName;
         }
