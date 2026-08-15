@@ -52,6 +52,8 @@ public sealed class MainForm : Form
     private TextBox _txtDisasm = null!;
     private TextBox _txtReport = null!;
     private CancellationTokenSource? _reportCts;
+    private ListView _lvHashes = null!;
+    private CancellationTokenSource? _hashCts;
     private readonly System.Windows.Forms.Timer _refreshTimer;
 
     private ProcessMemoryReader? _reader;
@@ -158,6 +160,7 @@ public sealed class MainForm : Form
         tabs.TabPages.Add(BuildSecurityTab());
         tabs.TabPages.Add(BuildThreadsTab());
         tabs.TabPages.Add(BuildDisasmTab());
+        tabs.TabPages.Add(BuildHashesTab());
         tabs.TabPages.Add(BuildInformeTab());
         split2.Panel2.Controls.Add(tabs);
 
@@ -200,6 +203,7 @@ public sealed class MainForm : Form
             _scanCts?.Cancel();
             _secCts?.Cancel();
             _reportCts?.Cancel();
+            _hashCts?.Cancel();
             _reader?.Dispose();
         };
     }
@@ -654,6 +658,49 @@ public sealed class MainForm : Form
         };
 
         page.Controls.Add(_txtReport);
+        page.Controls.Add(hint);
+        page.Controls.Add(bar);
+        return page;
+    }
+
+    private TabPage BuildHashesTab()
+    {
+        var page = new TabPage("Hashes");
+        var bar = new Panel { Dock = DockStyle.Top, Height = 34 };
+        var btnGo = new Button { Text = "Calcular hashes", Left = 4, Top = 4, Width = 130 };
+        btnGo.Click += (_, _) => _ = DoHashesAsync();
+        var btnStop = new Button { Text = "Detener", Left = 140, Top = 4, Width = 80 };
+        btnStop.Click += (_, _) => _hashCts?.Cancel();
+        var btnCopy = new Button { Text = "Copiar URL VirusTotal", Left = 226, Top = 4, Width = 170 };
+        btnCopy.Click += (_, _) => CopyVirusTotalUrl();
+        var btnCsv = new Button { Text = "Exportar CSV...", Left = 402, Top = 4, Width = 120 };
+        btnCsv.Click += (_, _) => ExportHashesCsv();
+        bar.Controls.AddRange(new Control[] { btnGo, btnStop, btnCopy, btnCsv });
+
+        _lvHashes = new ListView
+        {
+            Dock = DockStyle.Fill,
+            View = View.Details,
+            FullRowSelect = true,
+            GridLines = true,
+            MultiSelect = false
+        };
+        _lvHashes.Columns.Add("Modulo", 170);
+        _lvHashes.Columns.Add("Base", 130);
+        _lvHashes.Columns.Add("SHA-256", 460);
+        _lvHashes.Columns.Add("Ruta", 300);
+        _lvHashes.DoubleClick += (_, _) => CopyVirusTotalUrl();
+
+        var hint = new Label
+        {
+            Dock = DockStyle.Bottom,
+            Height = 22,
+            Text = "SHA-256 del archivo en disco de cada modulo. Doble clic copia su URL de VirusTotal (sin conexion automatica).",
+            ForeColor = Color.Gray,
+            Padding = new Padding(4, 2, 0, 0)
+        };
+
+        page.Controls.Add(_lvHashes);
         page.Controls.Add(hint);
         page.Controls.Add(bar);
         return page;
@@ -1649,6 +1696,74 @@ public sealed class MainForm : Form
         catch (OperationCanceledException) { _status.Text = "Informe cancelado."; _txtReport.Text = string.Empty; }
         catch (Exception ex) { _status.Text = "Error al generar el informe: " + ex.Message; }
         finally { _reportCts?.Dispose(); _reportCts = null; }
+    }
+
+    // ---------------- Hashes de modulos ----------------
+
+    private async Task DoHashesAsync()
+    {
+        if (_reader == null) { _status.Text = "Abre un proceso primero."; return; }
+        _lvHashes.Items.Clear();
+        _hashCts = new CancellationTokenSource();
+        var ct = _hashCts.Token;
+        var reader = _reader;
+        var progress = new Progress<string>(m => _status.Text = m);
+        try
+        {
+            var hashes = await Task.Run(() => ModuleHasher.Compute(reader, progress, ct), ct);
+            _lvHashes.BeginUpdate();
+            foreach (var h in hashes)
+            {
+                var it = new ListViewItem(h.Name) { Tag = h };
+                it.SubItems.Add(h.BaseText);
+                it.SubItems.Add(h.Sha256 ?? $"({h.Note ?? "n/d"})");
+                it.SubItems.Add(h.Path ?? "");
+                _lvHashes.Items.Add(it);
+            }
+            _lvHashes.EndUpdate();
+            _status.Text = $"{hashes.Count} modulos procesados.";
+        }
+        catch (OperationCanceledException) { _status.Text = "Calculo de hashes cancelado."; }
+        catch (Exception ex) { _status.Text = "Error: " + ex.Message; }
+        finally { _hashCts?.Dispose(); _hashCts = null; }
+    }
+
+    private void CopyVirusTotalUrl()
+    {
+        if (_lvHashes.SelectedItems.Count == 0) { _status.Text = "Selecciona un modulo."; return; }
+        if (_lvHashes.SelectedItems[0].Tag is not ModuleHash h || string.IsNullOrEmpty(h.VirusTotalUrl))
+        {
+            _status.Text = "Ese modulo no tiene hash (ruta en disco no disponible).";
+            return;
+        }
+        try { Clipboard.SetText(h.VirusTotalUrl); _status.Text = "URL de VirusTotal copiada: " + h.VirusTotalUrl; }
+        catch (Exception ex) { _status.Text = "No se pudo copiar: " + ex.Message; }
+    }
+
+    private void ExportHashesCsv()
+    {
+        if (_lvHashes.Items.Count == 0) { _status.Text = "No hay hashes que exportar."; return; }
+        using var sfd = new SaveFileDialog
+        {
+            Title = "Guardar hashes de modulos",
+            FileName = "hashes.csv",
+            Filter = "CSV (*.csv)|*.csv|Todos los archivos (*.*)|*.*"
+        };
+        if (sfd.ShowDialog(this) != DialogResult.OK) return;
+        try
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("modulo,base,sha256,ruta,virustotal");
+            foreach (ListViewItem it in _lvHashes.Items)
+            {
+                var h = it.Tag as ModuleHash;
+                string ruta = (h?.Path ?? "").Replace("\"", "\"\"");
+                sb.AppendLine($"{it.Text},{it.SubItems[1].Text},{it.SubItems[2].Text},\"{ruta}\",{h?.VirusTotalUrl}");
+            }
+            File.WriteAllText(sfd.FileName, sb.ToString());
+            _status.Text = "Guardado en " + sfd.FileName;
+        }
+        catch (Exception ex) { _status.Text = "Error al guardar: " + ex.Message; }
     }
 
     // ---------------- Utilidades ----------------

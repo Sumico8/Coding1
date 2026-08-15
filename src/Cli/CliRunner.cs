@@ -60,6 +60,8 @@ internal static class CliRunner
                     return CmdMinidump(opts, elevated);
                 case "report":
                     return CmdReport(opts, elevated);
+                case "hashes":
+                    return CmdHashes(opts, elevated);
                 default:
                     Console.Error.WriteLine(
                         $"Verbo desconocido: '{verb}'. Ejecuta 'MemReader.exe help' para ver el uso.");
@@ -196,7 +198,8 @@ internal static class CliRunner
         int pid = RequirePid(opts);
         WarnIfNotElevated(elevated);
         var progress = Progress(opts);
-        var report = TriageEngine.Analyze(pid, progress, CancellationToken.None);
+        bool hash = opts.ContainsKey("hash");
+        var report = TriageEngine.Analyze(pid, progress, CancellationToken.None, hash);
         EndProgress();
 
         string htmlPath = Get(opts, "out") ?? $"informe_pid{pid}.html";
@@ -208,6 +211,24 @@ internal static class CliRunner
             $"{report.HighSeverityCount} hallazgos de severidad alta, " +
             $"{report.HighEntropyRegions.Count} regiones de alta entropia, " +
             $"{report.SuspiciousThreads.Count} hilos sospechosos.");
+        return 0;
+    }
+
+    private static int CmdHashes(Dictionary<string, string> opts, bool elevated)
+    {
+        int pid = RequirePid(opts);
+        WarnIfNotElevated(elevated);
+        using var reader = new ProcessMemoryReader(pid);
+        var progress = Progress(opts);
+        var hashes = ModuleHasher.Compute(reader, progress, CancellationToken.None);
+        EndProgress();
+
+        var sb = new StringBuilder();
+        sb.AppendLine("module,base,sha256,path,virustotal");
+        foreach (var h in hashes)
+            sb.AppendLine($"{Csv(h.Name)},{h.BaseText},{h.Sha256 ?? ""},{Csv(h.Path ?? "")},{h.VirusTotalUrl}");
+        WriteOutput(sb.ToString(), Get(opts, "out"));
+        Console.Error.WriteLine($"{hashes.Count} modulos.");
         return 0;
     }
 
@@ -233,8 +254,11 @@ VERBOS:
             Vuelca todas las regiones legibles a una carpeta (con indice).
   minidump  --pid <N> [--out <archivo.dmp>] [--normal]
             Genera un minidump (memoria completa por defecto).
-  report    --pid <N> [--out <archivo.html>]
+  report    --pid <N> [--out <archivo.html>] [--hash]
             Informe de triage completo en HTML + JSON (mismo nombre base).
+            --hash calcula el SHA-256 de cada modulo (mas lento).
+  hashes    --pid <N> [--out <archivo.csv>]
+            SHA-256 de cada modulo en disco + URL de VirusTotal.
   version   Muestra la version.
   help      Muestra esta ayuda.
 

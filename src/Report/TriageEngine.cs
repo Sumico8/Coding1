@@ -16,7 +16,7 @@ public static class TriageEngine
     /// <summary>Analiza un proceso ya abierto.</summary>
     public static TriageReport Analyze(
         ProcessMemoryReader reader, string processName,
-        IProgress<string>? progress, CancellationToken ct)
+        IProgress<string>? progress, CancellationToken ct, bool hashModules = false)
     {
         var r = new TriageReport
         {
@@ -69,10 +69,17 @@ public static class TriageEngine
         var ranges = modules
             .Select(m => (start: m.BaseAddress, end: m.BaseAddress + (ulong)m.Size))
             .ToList();
+        if (hashModules) progress?.Report("Calculando hashes de modulos...");
         foreach (var m in modules)
+        {
+            ct.ThrowIfCancellationRequested();
+            string? sha = null;
+            if (hashModules && !string.IsNullOrEmpty(m.Path) && File.Exists(m.Path))
+                sha = ModuleHasher.HashFile(m.Path);
             r.Modules.Add(new ReportModule(
                 m.Name, m.BaseText, m.SizeText,
-                string.IsNullOrEmpty(m.Path) ? null : m.Path, null));
+                string.IsNullOrEmpty(m.Path) ? null : m.Path, sha));
+        }
 
         // Hilos con inicio fuera de todo modulo (posible codigo inyectado).
         progress?.Report("Analizando hilos...");
@@ -90,14 +97,15 @@ public static class TriageEngine
     }
 
     /// <summary>Abre el proceso por PID, lo analiza y cierra el handle.</summary>
-    public static TriageReport Analyze(int pid, IProgress<string>? progress, CancellationToken ct)
+    public static TriageReport Analyze(
+        int pid, IProgress<string>? progress, CancellationToken ct, bool hashModules = false)
     {
         string name = "(desconocido)";
         try { using var p = Process.GetProcessById(pid); name = p.ProcessName; }
         catch { /* el nombre no es imprescindible */ }
 
         using var reader = new ProcessMemoryReader(pid);
-        return Analyze(reader, name, progress, ct);
+        return Analyze(reader, name, progress, ct, hashModules);
     }
 
     private static string AppVersion()
