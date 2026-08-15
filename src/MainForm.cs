@@ -54,6 +54,9 @@ public sealed class MainForm : Form
     private CancellationTokenSource? _reportCts;
     private ListView _lvHashes = null!;
     private CancellationTokenSource? _hashCts;
+    private ListView _lvIoc = null!;
+    private TextBox _txtIocMinLen = null!;
+    private CancellationTokenSource? _iocCts;
     private readonly System.Windows.Forms.Timer _refreshTimer;
 
     private ProcessMemoryReader? _reader;
@@ -161,6 +164,7 @@ public sealed class MainForm : Form
         tabs.TabPages.Add(BuildThreadsTab());
         tabs.TabPages.Add(BuildDisasmTab());
         tabs.TabPages.Add(BuildHashesTab());
+        tabs.TabPages.Add(BuildIocTab());
         tabs.TabPages.Add(BuildInformeTab());
         split2.Panel2.Controls.Add(tabs);
 
@@ -204,6 +208,7 @@ public sealed class MainForm : Form
             _secCts?.Cancel();
             _reportCts?.Cancel();
             _hashCts?.Cancel();
+            _iocCts?.Cancel();
             _reader?.Dispose();
         };
     }
@@ -701,6 +706,48 @@ public sealed class MainForm : Form
         };
 
         page.Controls.Add(_lvHashes);
+        page.Controls.Add(hint);
+        page.Controls.Add(bar);
+        return page;
+    }
+
+    private TabPage BuildIocTab()
+    {
+        var page = new TabPage("IOCs");
+        var bar = new Panel { Dock = DockStyle.Top, Height = 34 };
+        var lbl = new Label { Text = "Long. min:", Left = 4, Top = 9, Width = 70 };
+        _txtIocMinLen = new TextBox { Left = 76, Top = 6, Width = 50, Text = "5", Font = Mono };
+        var btnGo = new Button { Text = "Extraer IOCs", Left = 134, Top = 4, Width = 120 };
+        btnGo.Click += (_, _) => _ = DoIocAsync();
+        var btnStop = new Button { Text = "Detener", Left = 260, Top = 4, Width = 80 };
+        btnStop.Click += (_, _) => _iocCts?.Cancel();
+        var btnCsv = new Button { Text = "Exportar CSV...", Left = 346, Top = 4, Width = 120 };
+        btnCsv.Click += (_, _) => ExportIocCsv();
+        bar.Controls.AddRange(new Control[] { lbl, _txtIocMinLen, btnGo, btnStop, btnCsv });
+
+        _lvIoc = new ListView
+        {
+            Dock = DockStyle.Fill,
+            View = View.Details,
+            FullRowSelect = true,
+            GridLines = true,
+            MultiSelect = false
+        };
+        _lvIoc.Columns.Add("Tipo", 90);
+        _lvIoc.Columns.Add("Valor", 640);
+        _lvIoc.Columns.Add("Direccion", 160);
+        _lvIoc.DoubleClick += (_, _) => JumpFromIoc();
+
+        var hint = new Label
+        {
+            Dock = DockStyle.Bottom,
+            Height = 22,
+            Text = "IPs, URLs, dominios, correos, rutas, claves de registro y GUIDs de la memoria. Doble clic para ver la direccion.",
+            ForeColor = Color.Gray,
+            Padding = new Padding(4, 2, 0, 0)
+        };
+
+        page.Controls.Add(_lvIoc);
         page.Controls.Add(hint);
         page.Controls.Add(bar);
         return page;
@@ -1759,6 +1806,73 @@ public sealed class MainForm : Form
                 var h = it.Tag as ModuleHash;
                 string ruta = (h?.Path ?? "").Replace("\"", "\"\"");
                 sb.AppendLine($"{it.Text},{it.SubItems[1].Text},{it.SubItems[2].Text},\"{ruta}\",{h?.VirusTotalUrl}");
+            }
+            File.WriteAllText(sfd.FileName, sb.ToString());
+            _status.Text = "Guardado en " + sfd.FileName;
+        }
+        catch (Exception ex) { _status.Text = "Error al guardar: " + ex.Message; }
+    }
+
+    // ---------------- IOCs ----------------
+
+    private async Task DoIocAsync()
+    {
+        if (_reader == null) { _status.Text = "Abre un proceso primero."; return; }
+        if (!int.TryParse(_txtIocMinLen.Text.Trim(), out int minLen) || minLen < 1) minLen = 5;
+        _lvIoc.Items.Clear();
+        _iocCts = new CancellationTokenSource();
+        var ct = _iocCts.Token;
+        var reader = _reader;
+        var progress = new Progress<string>(m => _status.Text = m);
+        const int maxStrings = 300000;
+        try
+        {
+            var iocs = await Task.Run(() => IocExtractor.Extract(reader, minLen, maxStrings, progress, ct), ct);
+            _lvIoc.BeginUpdate();
+            foreach (var io in iocs)
+            {
+                var it = new ListViewItem(io.Type) { Tag = io.Address };
+                it.SubItems.Add(io.Value.Length > 400 ? io.Value[..400] : io.Value);
+                it.SubItems.Add(io.AddressText);
+                _lvIoc.Items.Add(it);
+            }
+            _lvIoc.EndUpdate();
+            _status.Text = $"{iocs.Count:N0} IOCs unicos.";
+        }
+        catch (OperationCanceledException) { _status.Text = "Extraccion de IOCs cancelada."; }
+        catch (Exception ex) { _status.Text = "Error: " + ex.Message; }
+        finally { _iocCts?.Dispose(); _iocCts = null; }
+    }
+
+    private void JumpFromIoc()
+    {
+        if (_reader == null || _lvIoc.SelectedItems.Count == 0) return;
+        ulong addr = (ulong)_lvIoc.SelectedItems[0].Tag!;
+        _txtAddress.Text = "0x" + addr.ToString("X");
+        _txtSize.Text = "256";
+        ReadHexAtAddress();
+        if (_txtHex.Parent is TabPage page && page.Parent is TabControl tc)
+            tc.SelectedTab = page;
+    }
+
+    private void ExportIocCsv()
+    {
+        if (_lvIoc.Items.Count == 0) { _status.Text = "No hay IOCs que exportar."; return; }
+        using var sfd = new SaveFileDialog
+        {
+            Title = "Guardar IOCs",
+            FileName = "iocs.csv",
+            Filter = "CSV (*.csv)|*.csv|Todos los archivos (*.*)|*.*"
+        };
+        if (sfd.ShowDialog(this) != DialogResult.OK) return;
+        try
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("tipo,valor,direccion");
+            foreach (ListViewItem it in _lvIoc.Items)
+            {
+                string val = it.SubItems[1].Text.Replace("\"", "\"\"");
+                sb.AppendLine($"{it.Text},\"{val}\",{it.SubItems[2].Text}");
             }
             File.WriteAllText(sfd.FileName, sb.ToString());
             _status.Text = "Guardado en " + sfd.FileName;

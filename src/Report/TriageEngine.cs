@@ -16,7 +16,8 @@ public static class TriageEngine
     /// <summary>Analiza un proceso ya abierto.</summary>
     public static TriageReport Analyze(
         ProcessMemoryReader reader, string processName,
-        IProgress<string>? progress, CancellationToken ct, bool hashModules = false)
+        IProgress<string>? progress, CancellationToken ct,
+        bool hashModules = false, bool extractIocs = false)
     {
         var r = new TriageReport
         {
@@ -93,19 +94,28 @@ public static class TriageEngine
                     "Inicio fuera de todo modulo (posible codigo inyectado)"));
         }
 
+        // IOCs (opcional: implica extraer todas las cadenas, es lo mas lento).
+        if (extractIocs)
+        {
+            progress?.Report("Extrayendo IOCs...");
+            var iocs = IocExtractor.Extract(reader, 5, 200000, progress, ct);
+            r.Iocs = iocs.Select(i => new ReportIoc(i.Type, i.Value, i.AddressText)).ToList();
+        }
+
         return r;
     }
 
     /// <summary>Abre el proceso por PID, lo analiza y cierra el handle.</summary>
     public static TriageReport Analyze(
-        int pid, IProgress<string>? progress, CancellationToken ct, bool hashModules = false)
+        int pid, IProgress<string>? progress, CancellationToken ct,
+        bool hashModules = false, bool extractIocs = false)
     {
         string name = "(desconocido)";
         try { using var p = Process.GetProcessById(pid); name = p.ProcessName; }
         catch { /* el nombre no es imprescindible */ }
 
         using var reader = new ProcessMemoryReader(pid);
-        return Analyze(reader, name, progress, ct, hashModules);
+        return Analyze(reader, name, progress, ct, hashModules, extractIocs);
     }
 
     private static string AppVersion()

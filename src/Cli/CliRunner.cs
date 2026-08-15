@@ -62,6 +62,9 @@ internal static class CliRunner
                     return CmdReport(opts, elevated);
                 case "hashes":
                     return CmdHashes(opts, elevated);
+                case "ioc":
+                case "iocs":
+                    return CmdIoc(opts, elevated);
                 default:
                     Console.Error.WriteLine(
                         $"Verbo desconocido: '{verb}'. Ejecuta 'MemReader.exe help' para ver el uso.");
@@ -199,7 +202,8 @@ internal static class CliRunner
         WarnIfNotElevated(elevated);
         var progress = Progress(opts);
         bool hash = opts.ContainsKey("hash");
-        var report = TriageEngine.Analyze(pid, progress, CancellationToken.None, hash);
+        bool ioc = opts.ContainsKey("ioc");
+        var report = TriageEngine.Analyze(pid, progress, CancellationToken.None, hash, ioc);
         EndProgress();
 
         string htmlPath = Get(opts, "out") ?? $"informe_pid{pid}.html";
@@ -232,6 +236,26 @@ internal static class CliRunner
         return 0;
     }
 
+    private static int CmdIoc(Dictionary<string, string> opts, bool elevated)
+    {
+        int pid = RequirePid(opts);
+        WarnIfNotElevated(elevated);
+        int min = GetInt(opts, "min", 5);
+        int max = GetInt(opts, "max", 300000);
+        using var reader = new ProcessMemoryReader(pid);
+        var progress = Progress(opts);
+        var iocs = IocExtractor.Extract(reader, min, max, progress, CancellationToken.None);
+        EndProgress();
+
+        var sb = new StringBuilder();
+        sb.AppendLine("type,value,address");
+        foreach (var io in iocs)
+            sb.AppendLine($"{io.Type},{Csv(io.Value)},{io.AddressText}");
+        WriteOutput(sb.ToString(), Get(opts, "out"));
+        Console.Error.WriteLine($"{iocs.Count} IOCs unicos.");
+        return 0;
+    }
+
     private static int PrintHelp()
     {
         Console.WriteLine(
@@ -254,11 +278,13 @@ VERBOS:
             Vuelca todas las regiones legibles a una carpeta (con indice).
   minidump  --pid <N> [--out <archivo.dmp>] [--normal]
             Genera un minidump (memoria completa por defecto).
-  report    --pid <N> [--out <archivo.html>] [--hash]
+  report    --pid <N> [--out <archivo.html>] [--hash] [--ioc]
             Informe de triage completo en HTML + JSON (mismo nombre base).
-            --hash calcula el SHA-256 de cada modulo (mas lento).
+            --hash anade SHA-256 de modulos; --ioc anade IOCs (mas lento).
   hashes    --pid <N> [--out <archivo.csv>]
             SHA-256 de cada modulo en disco + URL de VirusTotal.
+  ioc       --pid <N> [--min <n>] [--out <archivo.csv>]
+            Extrae IOCs (IPs, URLs, dominios, correos, rutas, registro, GUIDs).
   version   Muestra la version.
   help      Muestra esta ayuda.
 
