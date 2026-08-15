@@ -67,6 +67,8 @@ internal static class CliRunner
                     return CmdIoc(opts, elevated);
                 case "search":
                     return CmdSearch(opts, elevated);
+                case "pe":
+                    return CmdPe(opts, elevated);
                 default:
                     Console.Error.WriteLine(
                         $"Verbo desconocido: '{verb}'. Ejecuta 'MemReader.exe help' para ver el uso.");
@@ -314,6 +316,48 @@ internal static class CliRunner
         return 0;
     }
 
+    private static int CmdPe(Dictionary<string, string> opts, bool elevated)
+    {
+        int pid = RequirePid(opts);
+        WarnIfNotElevated(elevated);
+        using var reader = new ProcessMemoryReader(pid);
+
+        ulong baseAddr;
+        if (opts.TryGetValue("base", out var bt))
+        {
+            if (!TryParseHex(bt, out baseAddr))
+                throw new CliUsageException("--base invalido (usa hexadecimal, p. ej. 0x7FF6...).");
+        }
+        else
+        {
+            baseAddr = 0;
+            try { using var p = Process.GetProcessById(pid); baseAddr = (ulong)(p.MainModule?.BaseAddress ?? IntPtr.Zero).ToInt64(); }
+            catch { /* se valida abajo */ }
+            if (baseAddr == 0)
+                throw new CliUsageException("No se pudo obtener el modulo principal; indica --base <hex>.");
+        }
+
+        var a = PeAnalyzer.Analyze(reader, baseAddr);
+        if (!a.Valid)
+        {
+            Console.Error.WriteLine(a.Error ?? "PE invalido.");
+            return 3;
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("section,rva,vsize,raw,perms,entropy");
+        foreach (var s in a.Sections)
+            sb.AppendLine($"{Csv(s.Name)},{s.Rva},{s.VirtualSize},{s.RawSize},{s.Perms},{s.Entropy:0.00}");
+        WriteOutput(sb.ToString(), Get(opts, "out"));
+
+        Console.Error.WriteLine(
+            $"PE {(a.Is64Bit ? "x64" : "x86")} base 0x{a.BaseAddress:X}: {a.Sections.Count} secciones, " +
+            $"{a.ExportCount} exports, {a.ImportedModules.Count} DLLs, {a.TlsCallbacks.Count} TLS, " +
+            $"{a.Anomalies.Count} anomalias.");
+        foreach (var an in a.Anomalies) Console.Error.WriteLine("  ! " + an);
+        return 0;
+    }
+
     private static int PrintHelp()
     {
         Console.WriteLine(
@@ -346,6 +390,9 @@ VERBOS:
   search    --pid <N> (--text <s> | --aob <patron> | --bytes <hex> |
             --int32 <n> | --int64 <n>) [--out <archivo.csv>]
             Busca en memoria. AOB admite comodines, p. ej. --aob 48 8B ?? E8
+  pe        --pid <N> [--base <hex>] [--out <archivo.csv>]
+            Analiza el PE (secciones, imports, exports, TLS, anomalias).
+            Sin --base usa el modulo principal.
   version   Muestra la version.
   help      Muestra esta ayuda.
 
@@ -424,6 +471,15 @@ EJEMPLOS:
 
     private static int GetInt(Dictionary<string, string> opts, string key, int def)
         => opts.TryGetValue(key, out var v) && int.TryParse(v, out int n) ? n : def;
+
+    private static bool TryParseHex(string text, out ulong value)
+    {
+        text = text.Trim();
+        if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) text = text[2..];
+        return ulong.TryParse(
+            text, System.Globalization.NumberStyles.HexNumber,
+            System.Globalization.CultureInfo.InvariantCulture, out value);
+    }
 
     private static int RequirePid(Dictionary<string, string> opts)
     {

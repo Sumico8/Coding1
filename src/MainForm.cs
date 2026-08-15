@@ -57,6 +57,9 @@ public sealed class MainForm : Form
     private ListView _lvIoc = null!;
     private TextBox _txtIocMinLen = null!;
     private CancellationTokenSource? _iocCts;
+    private TextBox _peAddr = null!;
+    private ListView _lvPeSections = null!;
+    private TextBox _txtPeInfo = null!;
     private readonly System.Windows.Forms.Timer _refreshTimer;
 
     private ProcessMemoryReader? _reader;
@@ -165,6 +168,7 @@ public sealed class MainForm : Form
         tabs.TabPages.Add(BuildDisasmTab());
         tabs.TabPages.Add(BuildHashesTab());
         tabs.TabPages.Add(BuildIocTab());
+        tabs.TabPages.Add(BuildPeTab());
         tabs.TabPages.Add(BuildInformeTab());
         split2.Panel2.Controls.Add(tabs);
 
@@ -749,6 +753,53 @@ public sealed class MainForm : Form
 
         page.Controls.Add(_lvIoc);
         page.Controls.Add(hint);
+        page.Controls.Add(bar);
+        return page;
+    }
+
+    private TabPage BuildPeTab()
+    {
+        var page = new TabPage("PE");
+        var bar = new Panel { Dock = DockStyle.Top, Height = 34 };
+        var lbl = new Label { Text = "Base (hex):", Left = 4, Top = 9, Width = 75 };
+        _peAddr = new TextBox { Left = 82, Top = 6, Width = 170, Font = Mono };
+        var btnGo = new Button { Text = "Analizar PE", Left = 258, Top = 4, Width = 110 };
+        btnGo.Click += (_, _) => DoAnalyzePe();
+        var btnImgs = new Button { Text = "Listar imagenes (MZ)", Left = 374, Top = 4, Width = 160 };
+        btnImgs.Click += (_, _) => ListImageRegions();
+        bar.Controls.AddRange(new Control[] { lbl, _peAddr, btnGo, btnImgs });
+
+        _lvPeSections = new ListView
+        {
+            Dock = DockStyle.Fill,
+            View = View.Details,
+            FullRowSelect = true,
+            GridLines = true,
+            MultiSelect = false
+        };
+        _lvPeSections.Columns.Add("Seccion", 100);
+        _lvPeSections.Columns.Add("RVA", 120);
+        _lvPeSections.Columns.Add("V.Size", 110);
+        _lvPeSections.Columns.Add("Raw", 110);
+        _lvPeSections.Columns.Add("Perms", 70);
+        _lvPeSections.Columns.Add("Entropia", 80);
+        _lvPeSections.DoubleClick += (_, _) => JumpFromPeSection();
+
+        _txtPeInfo = new TextBox
+        {
+            Dock = DockStyle.Bottom,
+            Height = 200,
+            Multiline = true,
+            ReadOnly = true,
+            ScrollBars = ScrollBars.Both,
+            WordWrap = false,
+            Font = Mono,
+            BackColor = Color.FromArgb(24, 24, 24),
+            ForeColor = Color.FromArgb(210, 215, 225)
+        };
+
+        page.Controls.Add(_lvPeSections);
+        page.Controls.Add(_txtPeInfo);
         page.Controls.Add(bar);
         return page;
     }
@@ -1887,6 +1938,101 @@ public sealed class MainForm : Form
             _status.Text = "Guardado en " + sfd.FileName;
         }
         catch (Exception ex) { _status.Text = "Error al guardar: " + ex.Message; }
+    }
+
+    // ---------------- Analisis PE ----------------
+
+    private async void DoAnalyzePe()
+    {
+        if (_reader == null) { _status.Text = "Abre un proceso primero."; return; }
+        if (!TryParseAddress(_peAddr.Text, out ulong baseAddr)) { _status.Text = "Direccion base invalida (hex)."; return; }
+        var reader = _reader;
+        _status.Text = "Analizando PE...";
+        try
+        {
+            var a = await Task.Run(() => PeAnalyzer.Analyze(reader, baseAddr));
+            _lvPeSections.Items.Clear();
+            if (!a.Valid)
+            {
+                _txtPeInfo.Text = a.Error ?? "PE invalido.";
+                _status.Text = a.Error ?? "PE invalido.";
+                return;
+            }
+
+            foreach (var s in a.Sections)
+            {
+                var it = new ListViewItem(s.Name) { Tag = s.Rva };
+                it.SubItems.Add(s.Rva);
+                it.SubItems.Add(s.VirtualSize);
+                it.SubItems.Add(s.RawSize);
+                it.SubItems.Add(s.Perms);
+                it.SubItems.Add(s.Entropy >= 0 ? s.Entropy.ToString("0.00") : "-");
+                if (s.Perms.Contains('X') && s.Entropy >= 7.2) it.ForeColor = Color.Firebrick;
+                _lvPeSections.Items.Add(it);
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"Base: 0x{a.BaseAddress:X}   {(a.Is64Bit ? "PE32+ (x64)" : "PE32 (x86)")}");
+            sb.AppendLine($"ImageBase preferida: {a.ImageBase}    SizeOfImage: {a.SizeOfImage}");
+            sb.AppendLine($"Entry point: {a.EntryPoint}");
+            sb.AppendLine($"Exports: {a.ExportCount}    DLLs importadas: {a.ImportedModules.Count}    TLS callbacks: {a.TlsCallbacks.Count}");
+            sb.AppendLine();
+            if (a.Anomalies.Count > 0)
+            {
+                sb.AppendLine("ANOMALIAS:");
+                foreach (var an in a.Anomalies) sb.AppendLine("  - " + an);
+                sb.AppendLine();
+            }
+            if (a.ImportedModules.Count > 0)
+            {
+                sb.AppendLine("DLLs importadas: " + string.Join(", ", a.ImportedModules));
+                sb.AppendLine();
+            }
+            if (a.TlsCallbacks.Count > 0)
+            {
+                sb.AppendLine("TLS callbacks: " + string.Join(", ", a.TlsCallbacks));
+                sb.AppendLine();
+            }
+            if (a.ExportSample.Count > 0)
+                sb.AppendLine("Exports (muestra): " + string.Join(", ", a.ExportSample));
+            _txtPeInfo.Text = sb.ToString();
+            _status.Text = $"PE analizado: {a.Sections.Count} secciones, {a.Anomalies.Count} anomalias.";
+        }
+        catch (Exception ex) { _status.Text = "Error al analizar el PE: " + ex.Message; }
+    }
+
+    private void ListImageRegions()
+    {
+        if (_reader == null) { _status.Text = "Abre un proceso primero."; return; }
+        try
+        {
+            var bases = _reader.EnumerateImageRegions();
+            var sb = new StringBuilder();
+            sb.AppendLine($"{bases.Count} imagenes (MZ) mapeadas. Copia una base al campo 'Base' y pulsa 'Analizar PE':");
+            foreach (var b in bases)
+            {
+                var mod = _scanner?.ResolveModuleOffset(b);
+                sb.AppendLine($"  0x{b:X}" + (mod != null ? $"   {mod.Value.mod.Name}" : "   (no listado por el cargador)"));
+            }
+            _txtPeInfo.Text = sb.ToString();
+            if (bases.Count > 0 && string.IsNullOrWhiteSpace(_peAddr.Text))
+                _peAddr.Text = "0x" + bases[0].ToString("X");
+            _status.Text = $"{bases.Count} imagenes MZ mapeadas.";
+        }
+        catch (Exception ex) { _status.Text = "Error: " + ex.Message; }
+    }
+
+    private void JumpFromPeSection()
+    {
+        if (_reader == null || _lvPeSections.SelectedItems.Count == 0) return;
+        if (!TryParseAddress(_peAddr.Text, out ulong baseAddr)) return;
+        if (_lvPeSections.SelectedItems[0].Tag is not string rvaText) return;
+        if (!TryParseAddress(rvaText, out ulong rva)) return;
+        _txtAddress.Text = "0x" + (baseAddr + rva).ToString("X");
+        _txtSize.Text = "256";
+        ReadHexAtAddress();
+        if (_txtHex.Parent is TabPage page && page.Parent is TabControl tc)
+            tc.SelectedTab = page;
     }
 
     // ---------------- Utilidades ----------------
