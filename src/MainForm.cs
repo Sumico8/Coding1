@@ -294,7 +294,7 @@ public sealed class MainForm : Form
             Left = 44, Top = 6, Width = 100,
             DropDownStyle = ComboBoxStyle.DropDownList
         };
-        _cmbSearchType.Items.AddRange(new object[] { "Texto", "Int32", "Int64", "Float", "Double", "Bytes hex" });
+        _cmbSearchType.Items.AddRange(new object[] { "Texto", "Int32", "Int64", "Float", "Double", "Bytes hex", "AOB" });
         _cmbSearchType.SelectedIndex = 0;
 
         var lbl = new Label { Text = "Valor:", Left = 150, Top = 9, Width = 45 };
@@ -966,6 +966,8 @@ public sealed class MainForm : Form
 
         string kind = _cmbSearchType.SelectedItem?.ToString() ?? "Texto";
         List<(byte[] pattern, string label, string preview)> patterns;
+        byte[]? aobPattern = null;
+        byte[]? aobMask = null;
         try
         {
             if (kind == "Texto")
@@ -975,6 +977,11 @@ public sealed class MainForm : Form
                     (System.Text.Encoding.Latin1.GetBytes(needle), "ASCII", needle),
                     (System.Text.Encoding.Unicode.GetBytes(needle), "UTF-16", needle),
                 };
+            }
+            else if (kind == "AOB")
+            {
+                (aobPattern, aobMask) = ValueInterpreter.ParseAob(needle);
+                patterns = new();
             }
             else
             {
@@ -999,7 +1006,9 @@ public sealed class MainForm : Form
         try
         {
             List<SearchHit> hits = await Task.Run(
-                () => reader.SearchPatterns(patterns, maxHits, progress, ct), ct);
+                () => aobPattern != null
+                    ? reader.SearchMasked(aobPattern, aobMask!, "AOB", maxHits, progress, ct)
+                    : reader.SearchPatterns(patterns, maxHits, progress, ct), ct);
 
             _lvResults.BeginUpdate();
             foreach (var h in hits)

@@ -65,6 +65,8 @@ internal static class CliRunner
                 case "ioc":
                 case "iocs":
                     return CmdIoc(opts, elevated);
+                case "search":
+                    return CmdSearch(opts, elevated);
                 default:
                     Console.Error.WriteLine(
                         $"Verbo desconocido: '{verb}'. Ejecuta 'MemReader.exe help' para ver el uso.");
@@ -256,6 +258,62 @@ internal static class CliRunner
         return 0;
     }
 
+    private static int CmdSearch(Dictionary<string, string> opts, bool elevated)
+    {
+        int pid = RequirePid(opts);
+        WarnIfNotElevated(elevated);
+        int maxHits = GetInt(opts, "max", 5000);
+        using var reader = new ProcessMemoryReader(pid);
+        var progress = Progress(opts);
+
+        List<SearchHit> hits;
+        if (opts.TryGetValue("aob", out var aob))
+        {
+            var (pat, mask) = ValueInterpreter.ParseAob(aob);
+            hits = reader.SearchMasked(pat, mask, "AOB", maxHits, progress, CancellationToken.None);
+        }
+        else if (opts.TryGetValue("text", out var text))
+        {
+            var patterns = new List<(byte[] pattern, string label, string preview)>
+            {
+                (System.Text.Encoding.Latin1.GetBytes(text), "ASCII", text),
+                (System.Text.Encoding.Unicode.GetBytes(text), "UTF-16", text),
+            };
+            hits = reader.SearchPatterns(patterns, maxHits, progress, CancellationToken.None);
+        }
+        else if (opts.TryGetValue("bytes", out var bytesHex))
+        {
+            hits = reader.SearchPatterns(
+                new List<(byte[] pattern, string label, string preview)> { ValueInterpreter.BuildPattern("Bytes hex", bytesHex) },
+                maxHits, progress, CancellationToken.None);
+        }
+        else if (opts.TryGetValue("int32", out var i32))
+        {
+            hits = reader.SearchPatterns(
+                new List<(byte[] pattern, string label, string preview)> { ValueInterpreter.BuildPattern("Int32", i32) },
+                maxHits, progress, CancellationToken.None);
+        }
+        else if (opts.TryGetValue("int64", out var i64))
+        {
+            hits = reader.SearchPatterns(
+                new List<(byte[] pattern, string label, string preview)> { ValueInterpreter.BuildPattern("Int64", i64) },
+                maxHits, progress, CancellationToken.None);
+        }
+        else
+        {
+            throw new CliUsageException("Indica que buscar: --text, --aob, --bytes, --int32 o --int64.");
+        }
+        EndProgress();
+
+        var sb = new StringBuilder();
+        sb.AppendLine("address,encoding,preview");
+        foreach (var h in hits)
+            sb.AppendLine($"0x{h.Address:X},{h.Encoding},{Csv(h.Preview)}");
+        WriteOutput(sb.ToString(), Get(opts, "out"));
+        Console.Error.WriteLine($"{hits.Count} coincidencias.");
+        return 0;
+    }
+
     private static int PrintHelp()
     {
         Console.WriteLine(
@@ -285,6 +343,9 @@ VERBOS:
             SHA-256 de cada modulo en disco + URL de VirusTotal.
   ioc       --pid <N> [--min <n>] [--out <archivo.csv>]
             Extrae IOCs (IPs, URLs, dominios, correos, rutas, registro, GUIDs).
+  search    --pid <N> (--text <s> | --aob <patron> | --bytes <hex> |
+            --int32 <n> | --int64 <n>) [--out <archivo.csv>]
+            Busca en memoria. AOB admite comodines, p. ej. --aob "48 8B ?? E8".
   version   Muestra la version.
   help      Muestra esta ayuda.
 

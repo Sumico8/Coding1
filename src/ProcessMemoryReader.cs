@@ -207,6 +207,79 @@ public sealed class ProcessMemoryReader : IDisposable
         return hits;
     }
 
+    /// <summary>
+    /// Busca un patron de bytes con comodines (AOB) en todas las regiones
+    /// legibles. En <paramref name="mask"/>, 0xFF = el byte debe coincidir y
+    /// 0x00 = comodin. Util para firmas de reversing (p. ej. 48 8B ?? ?? E8).
+    /// </summary>
+    public List<SearchHit> SearchMasked(
+        byte[] pattern, byte[] mask, string label, int maxHits,
+        IProgress<string>? progress, CancellationToken ct)
+    {
+        EnsureOpen();
+        var hits = new List<SearchHit>();
+        if (pattern.Length == 0 || pattern.Length != mask.Length) return hits;
+
+        var regions = EnumerateRegions(onlyReadable: true);
+        const int chunkSize = 1 << 20;
+        int overlap = pattern.Length;
+
+        int idx = 0;
+        foreach (var region in regions)
+        {
+            ct.ThrowIfCancellationRequested();
+            idx++;
+            progress?.Report($"Buscando AOB... region {idx}/{regions.Count} ({hits.Count} coincidencias)");
+
+            ulong pos = region.BaseAddress;
+            ulong end = region.BaseAddress + region.RegionSize;
+            while (pos < end)
+            {
+                ct.ThrowIfCancellationRequested();
+                int want = (int)Math.Min((ulong)chunkSize, end - pos);
+                byte[] data;
+                try { data = ReadBytes(pos, want); }
+                catch { break; }
+                if (data.Length == 0) break;
+
+                FindAllMasked(data, pattern, mask, pos, label, hits, maxHits);
+                if (hits.Count >= maxHits) return hits;
+
+                if (data.Length < want) break;
+                ulong advance = (ulong)Math.Max(1, data.Length - overlap);
+                pos += advance;
+            }
+        }
+        return hits;
+    }
+
+    private static void FindAllMasked(
+        byte[] haystack, byte[] pattern, byte[] mask, ulong baseAddr,
+        string label, List<SearchHit> hits, int maxHits)
+    {
+        int limit = haystack.Length - pattern.Length;
+        for (int i = 0; i <= limit; i++)
+        {
+            int j = 0;
+            for (; j < pattern.Length; j++)
+                if (mask[j] != 0 && haystack[i + j] != pattern[j]) break;
+
+            if (j == pattern.Length)
+            {
+                hits.Add(new SearchHit(baseAddr + (ulong)i, label, HexPreview(haystack, i, pattern.Length)));
+                if (hits.Count >= maxHits) return;
+            }
+        }
+    }
+
+    private static string HexPreview(byte[] d, int off, int len)
+    {
+        var sb = new System.Text.StringBuilder(len * 3);
+        for (int i = 0; i < len && off + i < d.Length; i++)
+            sb.Append(d[off + i].ToString("X2")).Append(' ');
+        return sb.ToString().TrimEnd();
+    }
+
     /// <summary>Enumera los modulos (DLL/EXE) cargados en el proceso.</summary>
     public List<ModuleInfo> EnumerateModules()
     {

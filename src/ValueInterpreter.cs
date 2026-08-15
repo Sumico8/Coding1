@@ -96,6 +96,51 @@ public static class ValueInterpreter
         }
     }
 
+    /// <summary>
+    /// Interpreta un patron AOB con comodines, p. ej. "48 8B ?? ?? E8" o
+    /// "488B????E8". Devuelve (patron, mascara) donde mascara 0xFF = coincide y
+    /// 0x00 = comodin. Acepta "?" o "??" como comodin.
+    /// </summary>
+    public static (byte[] pattern, byte[] mask) ParseAob(string text)
+    {
+        var clean = text.Replace(",", " ").Replace("-", " ");
+        var tokens = clean.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+
+        // Caso sin separadores: "488B??E8" -> partir en pares de caracteres.
+        if (tokens.Length == 1 && tokens[0].Length > 2 && tokens[0].IndexOf('?') < 0)
+        {
+            string s = tokens[0];
+            if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) s = s[2..];
+            if (s.Length % 2 == 0)
+            {
+                var list = new List<string>(s.Length / 2);
+                for (int i = 0; i < s.Length; i += 2) list.Add(s.Substring(i, 2));
+                tokens = list.ToArray();
+            }
+        }
+
+        var pat = new List<byte>(tokens.Length);
+        var mask = new List<byte>(tokens.Length);
+        foreach (var raw in tokens)
+        {
+            string t = raw;
+            if (t.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) t = t[2..];
+            if (t == "?" || t == "??" || t == "*")
+            {
+                pat.Add(0);
+                mask.Add(0);
+            }
+            else
+            {
+                pat.Add(Convert.ToByte(t, 16));
+                mask.Add(0xFF);
+            }
+        }
+        if (pat.Count == 0) throw new ArgumentException("Patron AOB vacio.");
+        if (mask.TrueForAll(b => b == 0)) throw new ArgumentException("El patron AOB es todo comodines.");
+        return (pat.ToArray(), mask.ToArray());
+    }
+
     private static byte[] ParseHexBytes(string text)
     {
         // Acepta "DE AD BE EF", "DEADBEEF" o "0xDE,0xAD".
