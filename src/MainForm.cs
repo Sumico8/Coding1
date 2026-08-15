@@ -35,6 +35,9 @@ public sealed class MainForm : Form
     private TextBox _ptrMaxOff = null!;
     private PointerScanner? _scanner;
     private CancellationTokenSource? _ptrCts;
+    private ListView _lvStrings = null!;
+    private TextBox _txtMinLen = null!;
+    private CancellationTokenSource? _stringsCts;
     private readonly System.Windows.Forms.Timer _refreshTimer;
 
     private ProcessMemoryReader? _reader;
@@ -102,7 +105,9 @@ public sealed class MainForm : Form
         btnDump.Click += (_, _) => DumpSelectedRegion();
         var btnDumpAll = new Button { Text = "Volcar TODO a carpeta...", Left = 376, Top = 3, Width = 200 };
         btnDumpAll.Click += (_, _) => DumpAllRegions();
-        regionsBar.Controls.AddRange(new Control[] { _chkOnlyReadable, btnDump, btnDumpAll });
+        var btnMinidump = new Button { Text = "Minidump (.dmp)...", Left = 584, Top = 3, Width = 150 };
+        btnMinidump.Click += (_, _) => WriteMinidump();
+        regionsBar.Controls.AddRange(new Control[] { _chkOnlyReadable, btnDump, btnDumpAll, btnMinidump });
 
         _lvRegions = new ListView
         {
@@ -131,6 +136,7 @@ public sealed class MainForm : Form
         tabs.TabPages.Add(BuildSearchTab(out _txtSearch, out _lvResults, out _btnSearch));
         tabs.TabPages.Add(BuildModulesTab());
         tabs.TabPages.Add(BuildPointersTab());
+        tabs.TabPages.Add(BuildStringsTab());
         split2.Panel2.Controls.Add(tabs);
 
         // Temporizador para el auto-refresco del visor hexadecimal.
@@ -168,6 +174,7 @@ public sealed class MainForm : Form
             _refreshTimer.Stop();
             _searchCts?.Cancel();
             _ptrCts?.Cancel();
+            _stringsCts?.Cancel();
             _reader?.Dispose();
         };
     }
@@ -378,6 +385,50 @@ public sealed class MainForm : Form
         return page;
     }
 
+    private TabPage BuildStringsTab()
+    {
+        var page = new TabPage("Strings");
+        var bar = new Panel { Dock = DockStyle.Top, Height = 34 };
+
+        var lbl = new Label { Text = "Long. min:", Left = 4, Top = 9, Width = 70 };
+        _txtMinLen = new TextBox { Left = 76, Top = 6, Width = 50, Text = "5", Font = Mono };
+        var btnGo = new Button { Text = "Extraer strings", Left = 134, Top = 4, Width = 130 };
+        btnGo.Click += (_, _) => _ = DoExtractStringsAsync();
+        var btnStop = new Button { Text = "Detener", Left = 270, Top = 4, Width = 80 };
+        btnStop.Click += (_, _) => _stringsCts?.Cancel();
+        var btnCsv = new Button { Text = "Exportar CSV...", Left = 356, Top = 4, Width = 120 };
+        btnCsv.Click += (_, _) => ExportStringsCsv();
+
+        bar.Controls.AddRange(new Control[] { lbl, _txtMinLen, btnGo, btnStop, btnCsv });
+
+        _lvStrings = new ListView
+        {
+            Dock = DockStyle.Fill,
+            View = View.Details,
+            FullRowSelect = true,
+            GridLines = true,
+            MultiSelect = false
+        };
+        _lvStrings.Columns.Add("Direccion", 160);
+        _lvStrings.Columns.Add("Cod.", 70);
+        _lvStrings.Columns.Add("Texto", 620);
+        _lvStrings.DoubleClick += (_, _) => JumpToString();
+
+        var hint = new Label
+        {
+            Dock = DockStyle.Bottom,
+            Height = 22,
+            Text = "Doble clic en una cadena para verla en el visor hexadecimal.",
+            ForeColor = Color.Gray,
+            Padding = new Padding(4, 2, 0, 0)
+        };
+
+        page.Controls.Add(_lvStrings);
+        page.Controls.Add(hint);
+        page.Controls.Add(bar);
+        return page;
+    }
+
     // ---------------- Procesos ----------------
 
     private void LoadProcesses()
@@ -434,6 +485,7 @@ public sealed class MainForm : Form
         // Al cambiar de proceso, paramos el auto-refresco y cualquier escaneo.
         _chkAutoRefresh.Checked = false;
         _ptrCts?.Cancel();
+        _stringsCts?.Cancel();
 
         try
         {
@@ -452,6 +504,7 @@ public sealed class MainForm : Form
             _txtInterp.Text = string.Empty;
             _lvResults.Items.Clear();
             _lvPointers.Items.Clear();
+            _lvStrings.Items.Clear();
         }
         catch (Win32Exception ex)
         {
@@ -461,6 +514,7 @@ public sealed class MainForm : Form
             _lvRegions.Items.Clear();
             _lvModules.Items.Clear();
             _lvPointers.Items.Clear();
+            _lvStrings.Items.Clear();
             MessageBox.Show(ex.Message, "No se pudo abrir el proceso",
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
             _status.Text = $"Fallo al abrir PID {pid}.";
@@ -952,6 +1006,106 @@ public sealed class MainForm : Form
         ReadHexAtAddress();
         if (_txtHex.Parent is TabPage page && page.Parent is TabControl tc)
             tc.SelectedTab = page;
+    }
+
+    // ---------------- Strings ----------------
+
+    private async Task DoExtractStringsAsync()
+    {
+        if (_reader == null) { _status.Text = "Abre un proceso primero."; return; }
+        if (!int.TryParse(_txtMinLen.Text.Trim(), out int minLen) || minLen < 1) minLen = 5;
+
+        _lvStrings.Items.Clear();
+        _stringsCts = new CancellationTokenSource();
+        var ct = _stringsCts.Token;
+        var reader = _reader;
+        var progress = new Progress<string>(m => _status.Text = m);
+        const int maxResults = 100000;
+        try
+        {
+            var strings = await Task.Run(
+                () => StringsExtractor.Extract(reader, minLen, maxResults, progress, ct), ct);
+
+            _lvStrings.BeginUpdate();
+            foreach (var s in strings)
+            {
+                var it = new ListViewItem("0x" + s.Address.ToString("X")) { Tag = s.Address };
+                it.SubItems.Add(s.Encoding);
+                it.SubItems.Add(s.Text.Length > 400 ? s.Text[..400] : s.Text);
+                _lvStrings.Items.Add(it);
+            }
+            _lvStrings.EndUpdate();
+            _status.Text = strings.Count >= maxResults
+                ? $"Extraccion detenida en {maxResults:N0} cadenas."
+                : $"{strings.Count:N0} cadenas extraidas.";
+        }
+        catch (OperationCanceledException) { _status.Text = "Extraccion cancelada."; }
+        catch (Exception ex) { _status.Text = "Error: " + ex.Message; }
+        finally { _stringsCts?.Dispose(); _stringsCts = null; }
+    }
+
+    private void JumpToString()
+    {
+        if (_reader == null || _lvStrings.SelectedItems.Count == 0) return;
+        ulong addr = (ulong)_lvStrings.SelectedItems[0].Tag!;
+        _txtAddress.Text = "0x" + addr.ToString("X");
+        _txtSize.Text = "256";
+        ReadHexAtAddress();
+        if (_txtHex.Parent is TabPage page && page.Parent is TabControl tc)
+            tc.SelectedTab = page;
+    }
+
+    private void ExportStringsCsv()
+    {
+        if (_lvStrings.Items.Count == 0) { _status.Text = "No hay cadenas que exportar."; return; }
+        using var sfd = new SaveFileDialog
+        {
+            Title = "Guardar strings",
+            FileName = "strings.csv",
+            Filter = "CSV (*.csv)|*.csv|Todos los archivos (*.*)|*.*"
+        };
+        if (sfd.ShowDialog(this) != DialogResult.OK) return;
+        try
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("direccion,codificacion,texto");
+            foreach (ListViewItem it in _lvStrings.Items)
+            {
+                string txt = it.SubItems[2].Text.Replace("\"", "\"\"");
+                sb.AppendLine($"{it.Text},{it.SubItems[1].Text},\"{txt}\"");
+            }
+            File.WriteAllText(sfd.FileName, sb.ToString());
+            _status.Text = "Guardado en " + sfd.FileName;
+        }
+        catch (Exception ex) { _status.Text = "Error al guardar: " + ex.Message; }
+    }
+
+    // ---------------- Minidump ----------------
+
+    private async void WriteMinidump()
+    {
+        if (_reader == null) { _status.Text = "Abre un proceso primero."; return; }
+        using var sfd = new SaveFileDialog
+        {
+            Title = "Guardar minidump (memoria completa)",
+            FileName = $"pid{_reader.ProcessId}.dmp",
+            Filter = "Minidump (*.dmp)|*.dmp|Todos los archivos (*.*)|*.*"
+        };
+        if (sfd.ShowDialog(this) != DialogResult.OK) return;
+
+        var reader = _reader;
+        string path = sfd.FileName;
+        _status.Text = "Generando minidump (memoria completa)...";
+        try
+        {
+            await Task.Run(() => reader.WriteMiniDump(path, fullMemory: true));
+            var fi = new FileInfo(path);
+            _status.Text = $"Minidump guardado: {FormatBytes((ulong)fi.Length)} en {path}";
+        }
+        catch (Exception ex)
+        {
+            _status.Text = "Error al generar minidump: " + ex.Message;
+        }
     }
 
     // ---------------- Utilidades ----------------

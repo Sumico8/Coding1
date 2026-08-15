@@ -84,6 +84,23 @@ internal static class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool IsWow64Process(IntPtr hProcess, [MarshalAs(UnmanagedType.Bool)] out bool wow64Process);
 
+    // Tipos de minidump (subconjunto). WithFullMemory produce un volcado grande
+    // pero completo, analizable en WinDbg. Es la misma capacidad que "Crear
+    // archivo de volcado" del Administrador de tareas.
+    public const int MiniDumpNormal = 0x00000000;
+    public const int MiniDumpWithFullMemory = 0x00000002;
+
+    [DllImport("dbghelp.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool MiniDumpWriteDump(
+        IntPtr hProcess,
+        uint processId,
+        Microsoft.Win32.SafeHandles.SafeFileHandle hFile,
+        int dumpType,
+        IntPtr exceptionParam,
+        IntPtr userStreamParam,
+        IntPtr callbackParam);
+
     /// <summary>Devuelve true si la proteccion de la pagina permite lectura.</summary>
     public static bool IsReadable(uint protect)
     {

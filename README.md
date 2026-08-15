@@ -22,8 +22,12 @@ de escritorio (WinForms, .NET 8) que:
   cálculo, sin modificar memoria.
 - **Auto-refresco (1 s)** del visor para vigilar cómo cambia un valor en vivo.
 - **Copiar / exportar** el volcado (texto) y los resultados de búsqueda (CSV).
+- **Extracción de strings** (tipo `strings`): saca todas las cadenas ASCII/UTF-16
+  imprimibles de la memoria, con su dirección; útil para triage/forense.
 - **Vuelca** una región a `.bin`, o **todas** las regiones legibles a una carpeta
   (con índice) para análisis forense en tu laboratorio.
+- **Export a minidump `.dmp`** (memoria completa) compatible con WinDbg — la misma
+  capacidad que "Crear archivo de volcado" del Administrador de tareas.
 
 Todo se apoya en APIs **documentadas y soportadas** de Windows
 (`OpenProcess`, `VirtualQueryEx`, `ReadProcessMemory`). No modifica la memoria de

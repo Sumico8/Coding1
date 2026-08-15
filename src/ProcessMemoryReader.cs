@@ -358,6 +358,28 @@ public sealed class ProcessMemoryReader : IDisposable
         return total;
     }
 
+    /// <summary>
+    /// Genera un minidump (.dmp) del proceso, analizable en WinDbg. Con
+    /// <paramref name="fullMemory"/> incluye toda la memoria (archivo grande).
+    /// Misma capacidad que "Crear archivo de volcado" del Administrador de tareas.
+    /// </summary>
+    public void WriteMiniDump(string path, bool fullMemory)
+    {
+        EnsureOpen();
+        using var fs = new FileStream(path, FileMode.Create, FileAccess.ReadWrite);
+        int type = fullMemory ? NativeMethods.MiniDumpWithFullMemory : NativeMethods.MiniDumpNormal;
+        bool ok = NativeMethods.MiniDumpWriteDump(
+            _handle, (uint)ProcessId, fs.SafeFileHandle, type,
+            IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+        if (!ok)
+        {
+            int err = Marshal.GetLastWin32Error();
+            throw new Win32Exception(err,
+                $"MiniDumpWriteDump fallo (codigo Win32: {err}). " +
+                "Algunos procesos protegidos no permiten el volcado.");
+        }
+    }
+
     private void EnsureOpen()
     {
         if (!IsOpen)
