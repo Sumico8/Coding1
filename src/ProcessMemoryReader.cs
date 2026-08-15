@@ -1,7 +1,17 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace MemReader;
+
+/// <summary>Un modulo (DLL/EXE) cargado en el proceso.</summary>
+public sealed record ModuleInfo(string Name, ulong BaseAddress, long Size, string Path)
+{
+    public string BaseText => $"0x{BaseAddress:X}";
+    public string SizeText => Size >= 1024 * 1024
+        ? $"{Size / (1024.0 * 1024.0):0.##} MB"
+        : $"{Size / 1024.0:0.##} KB";
+}
 
 /// <summary>Describe una region de memoria de un proceso.</summary>
 public sealed record MemoryRegion(
@@ -133,17 +143,34 @@ public sealed class ProcessMemoryReader : IDisposable
         IProgress<string>? progress,
         CancellationToken ct)
     {
+        if (string.IsNullOrEmpty(needle)) return new List<SearchHit>();
+        var patterns = new List<(byte[] pattern, string label, string preview)>
+        {
+            (System.Text.Encoding.Latin1.GetBytes(needle), "ASCII", needle),
+            (System.Text.Encoding.Unicode.GetBytes(needle), "UTF-16", needle),
+        };
+        return SearchPatterns(patterns, maxHits, progress, ct);
+    }
+
+    /// <summary>
+    /// Busca uno o varios patrones de bytes en todas las regiones legibles.
+    /// La UI construye los patrones segun el tipo (texto, Int32, Float, bytes hex...).
+    /// </summary>
+    public List<SearchHit> SearchPatterns(
+        IReadOnlyList<(byte[] pattern, string label, string preview)> patterns,
+        int maxHits,
+        IProgress<string>? progress,
+        CancellationToken ct)
+    {
         EnsureOpen();
         var hits = new List<SearchHit>();
-        if (string.IsNullOrEmpty(needle)) return hits;
-
-        byte[] ascii = System.Text.Encoding.Latin1.GetBytes(needle);
-        byte[] utf16 = System.Text.Encoding.Unicode.GetBytes(needle);
+        var active = patterns.Where(p => p.pattern.Length > 0).ToList();
+        if (active.Count == 0) return hits;
 
         var regions = EnumerateRegions(onlyReadable: true);
         const int chunkSize = 1 << 20; // 1 MB por lectura.
         // Solape para no perder coincidencias que crucen el limite de un chunk.
-        int overlap = Math.Max(ascii.Length, utf16.Length);
+        int overlap = active.Max(p => p.pattern.Length);
 
         int idx = 0;
         foreach (var region in regions)
@@ -165,9 +192,11 @@ public sealed class ProcessMemoryReader : IDisposable
 
                 if (data.Length == 0) break;
 
-                FindAll(data, ascii, pos, "ASCII", needle, hits, maxHits);
-                FindAll(data, utf16, pos, "UTF-16", needle, hits, maxHits);
-                if (hits.Count >= maxHits) return hits;
+                foreach (var p in active)
+                {
+                    FindAll(data, p.pattern, pos, p.label, p.preview, hits, maxHits);
+                    if (hits.Count >= maxHits) return hits;
+                }
 
                 if (data.Length < want) break; // No se leyo todo: fin de la region util.
 
@@ -176,6 +205,103 @@ public sealed class ProcessMemoryReader : IDisposable
             }
         }
         return hits;
+    }
+
+    /// <summary>Enumera los modulos (DLL/EXE) cargados en el proceso.</summary>
+    public List<ModuleInfo> EnumerateModules()
+    {
+        var list = new List<ModuleInfo>();
+        try
+        {
+            using var proc = Process.GetProcessById(ProcessId);
+            foreach (ProcessModule m in proc.Modules)
+            {
+                try
+                {
+                    list.Add(new ModuleInfo(
+                        m.ModuleName ?? "(sin nombre)",
+                        (ulong)m.BaseAddress.ToInt64(),
+                        m.ModuleMemorySize,
+                        m.FileName ?? ""));
+                }
+                catch { /* modulo inaccesible: lo saltamos */ }
+            }
+        }
+        catch
+        {
+            // Enumerar modulos puede fallar por diferencia de arquitectura
+            // (proceso de 32 bits) o por permisos. Devolvemos lo que tengamos.
+        }
+        return list.OrderBy(m => m.BaseAddress).ToList();
+    }
+
+    /// <summary>Ruta completa del ejecutable del proceso, si es accesible.</summary>
+    public string? GetProcessPath()
+    {
+        try
+        {
+            using var proc = Process.GetProcessById(ProcessId);
+            return proc.MainModule?.FileName;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Devuelve true si el proceso objetivo es de 32 bits (WOW64).</summary>
+    public bool IsTargetWow64()
+    {
+        try
+        {
+            if (NativeMethods.IsWow64Process(_handle, out bool wow64))
+                return wow64;
+        }
+        catch { /* ignore */ }
+        return false;
+    }
+
+    /// <summary>
+    /// Vuelca TODAS las regiones legibles a una carpeta (un archivo por region)
+    /// mas un indice de texto. Util para forense/analisis en tu laboratorio.
+    /// </summary>
+    public (int files, long bytes) DumpAllReadableRegions(
+        string folder, IProgress<string>? progress, CancellationToken ct)
+    {
+        EnsureOpen();
+        Directory.CreateDirectory(folder);
+        var regions = EnumerateRegions(onlyReadable: true);
+        var index = new System.Text.StringBuilder();
+        index.AppendLine("archivo\tbase\ttamano\tproteccion\ttipo");
+
+        int files = 0;
+        long totalBytes = 0;
+        int idx = 0;
+        foreach (var r in regions)
+        {
+            ct.ThrowIfCancellationRequested();
+            idx++;
+            progress?.Report($"Volcando region {idx}/{regions.Count} ({files} archivos)");
+
+            string fname = $"0x{r.BaseAddress:X}_{r.ProtectText}.bin";
+            string fpath = Path.Combine(folder, fname);
+            try
+            {
+                long written = DumpRegionToFile(r, fpath, ct);
+                if (written > 0)
+                {
+                    files++;
+                    totalBytes += written;
+                    index.AppendLine($"{fname}\t0x{r.BaseAddress:X}\t{r.RegionSize}\t{r.ProtectText}\t{r.TypeText}");
+                }
+                else
+                {
+                    File.Delete(fpath); // No se pudo leer: no dejamos un archivo vacio.
+                }
+            }
+            catch (OperationCanceledException) { throw; }
+            catch { /* region inaccesible */ }
+        }
+
+        File.WriteAllText(Path.Combine(folder, "_indice.txt"), index.ToString());
+        return (files, totalBytes);
     }
 
     private static void FindAll(

@@ -5,12 +5,20 @@ pentesting, análisis de malware en laboratorio, forense y CTF. Es una aplicaci�
 de escritorio (WinForms, .NET 8) que:
 
 - Lista todos los procesos en ejecución.
-- Abre el proceso que selecciones **en modo solo lectura**.
+- Abre el proceso que selecciones **en modo solo lectura**, mostrando su
+  **arquitectura** (x64 / x86-WOW64) y su ruta.
 - Enumera sus regiones de memoria (dirección, tamaño, protección, tipo).
+- Lista los **módulos cargados** (DLL/EXE) con su dirección base — doble clic para
+  saltar a su memoria.
 - Muestra la memoria en un **visor hexadecimal** (hex + ASCII).
-- **Busca cadenas** en toda la memoria del proceso (ASCII y UTF-16), útil para
-  localizar tokens, claves o texto en claro.
-- **Vuelca** una región completa a un archivo `.bin`.
+- **Panel de interpretación**: ve los bytes de una dirección como int8/16/32/64,
+  float, double, puntero y cadena.
+- **Búsqueda tipada**: por texto (ASCII y UTF-16), o por valor **Int32 / Int64 /
+  Float / Double / bytes hex**. Útil para encontrar dónde vive un valor en *tu* app.
+- **Auto-refresco (1 s)** del visor para vigilar cómo cambia un valor en vivo.
+- **Copiar / exportar** el volcado (texto) y los resultados de búsqueda (CSV).
+- **Vuelca** una región a `.bin`, o **todas** las regiones legibles a una carpeta
+  (con índice) para análisis forense en tu laboratorio.
 
 Todo se apoya en APIs **documentadas y soportadas** de Windows
 (`OpenProcess`, `VirtualQueryEx`, `ReadProcessMemory`). No modifica la memoria de
@@ -135,7 +143,8 @@ MemReader.csproj              Proyecto .NET (WinForms, x64)
 app.manifest                  Solicita elevación (Administrador) + DPI
 src/NativeMethods.cs          P/Invoke a kernel32 (APIs documentadas)
 src/Privileges.cs             Habilita SeDebugPrivilege (advapi32)
-src/ProcessMemoryReader.cs    Núcleo: abrir proceso, enumerar y leer memoria
+src/ProcessMemoryReader.cs    Núcleo: abrir proceso, enumerar, leer, módulos, dump
+src/ValueInterpreter.cs       Interpreta bytes como tipos y construye patrones
 src/HexFormatter.cs           Volcado hexadecimal
 src/MainForm.cs               Interfaz gráfica
 src/Program.cs                Punto de entrada

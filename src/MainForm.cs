@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
+using System.Text;
 
 namespace MemReader;
 
@@ -23,6 +24,12 @@ public sealed class MainForm : Form
     private readonly Label _lblAdmin;
     private readonly ToolStripStatusLabel _status;
     private readonly Button _btnSearch;
+
+    private ComboBox _cmbSearchType = null!;
+    private TextBox _txtInterp = null!;
+    private CheckBox _chkAutoRefresh = null!;
+    private ListView _lvModules = null!;
+    private readonly System.Windows.Forms.Timer _refreshTimer;
 
     private ProcessMemoryReader? _reader;
     private List<MemoryRegion> _regions = new();
@@ -87,7 +94,9 @@ public sealed class MainForm : Form
         _chkOnlyReadable.CheckedChanged += (_, _) => { if (_reader != null) EnumerateRegions(); };
         var btnDump = new Button { Text = "Volcar region a archivo...", Left = 180, Top = 3, Width = 190 };
         btnDump.Click += (_, _) => DumpSelectedRegion();
-        regionsBar.Controls.AddRange(new Control[] { _chkOnlyReadable, btnDump });
+        var btnDumpAll = new Button { Text = "Volcar TODO a carpeta...", Left = 376, Top = 3, Width = 200 };
+        btnDumpAll.Click += (_, _) => DumpAllRegions();
+        regionsBar.Controls.AddRange(new Control[] { _chkOnlyReadable, btnDump, btnDumpAll });
 
         _lvRegions = new ListView
         {
@@ -110,11 +119,16 @@ public sealed class MainForm : Form
         regionsHost.Controls.Add(_lblProcess);
         split2.Panel1.Controls.Add(regionsHost);
 
-        // Pestanas (abajo): visor hex + busqueda
+        // Pestanas (abajo): visor hex + busqueda + modulos
         var tabs = new TabControl { Dock = DockStyle.Fill };
         tabs.TabPages.Add(BuildHexTab());
         tabs.TabPages.Add(BuildSearchTab(out _txtSearch, out _lvResults, out _btnSearch));
+        tabs.TabPages.Add(BuildModulesTab());
         split2.Panel2.Controls.Add(tabs);
+
+        // Temporizador para el auto-refresco del visor hexadecimal.
+        _refreshTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+        _refreshTimer.Tick += (_, _) => { if (_reader != null) ReadHexAtAddress(); };
 
         split1.Panel2.Controls.Add(split2);
 
@@ -142,7 +156,7 @@ public sealed class MainForm : Form
             ShowElevationState();
             LoadProcesses();
         };
-        FormClosing += (_, _) => { _searchCts?.Cancel(); _reader?.Dispose(); };
+        FormClosing += (_, _) => { _refreshTimer.Stop(); _searchCts?.Cancel(); _reader?.Dispose(); };
     }
 
     // Referencias temporales usadas al construir las pestanas.
@@ -156,13 +170,22 @@ public sealed class MainForm : Form
         var bar = new Panel { Dock = DockStyle.Top, Height = 34 };
 
         var lblAddr = new Label { Text = "Direccion (hex):", Left = 4, Top = 9, Width = 100 };
-        _hexAddress = new TextBox { Left = 106, Top = 6, Width = 160, Font = Mono };
-        var lblSize = new Label { Text = "Bytes:", Left = 276, Top = 9, Width = 45 };
-        _hexSize = new TextBox { Left = 322, Top = 6, Width = 80, Text = "4096", Font = Mono };
-        var btnRead = new Button { Text = "Leer", Left = 410, Top = 4, Width = 80 };
+        _hexAddress = new TextBox { Left = 106, Top = 6, Width = 150, Font = Mono };
+        var lblSize = new Label { Text = "Bytes:", Left = 262, Top = 9, Width = 45 };
+        _hexSize = new TextBox { Left = 308, Top = 6, Width = 70, Text = "4096", Font = Mono };
+        var btnRead = new Button { Text = "Leer", Left = 384, Top = 4, Width = 64 };
         btnRead.Click += (_, _) => ReadHexAtAddress();
+        var btnCopy = new Button { Text = "Copiar", Left = 452, Top = 4, Width = 72 };
+        btnCopy.Click += (_, _) => CopyHexToClipboard();
+        var btnExport = new Button { Text = "Exportar...", Left = 528, Top = 4, Width = 88 };
+        btnExport.Click += (_, _) => ExportHexToFile();
+        _chkAutoRefresh = new CheckBox { Text = "Auto 1s", Left = 624, Top = 7, Width = 80 };
+        _chkAutoRefresh.CheckedChanged += (_, _) => ToggleAutoRefresh();
 
-        bar.Controls.AddRange(new Control[] { lblAddr, _hexAddress, lblSize, _hexSize, btnRead });
+        bar.Controls.AddRange(new Control[]
+        {
+            lblAddr, _hexAddress, lblSize, _hexSize, btnRead, btnCopy, btnExport, _chkAutoRefresh
+        });
 
         _hexView = new TextBox
         {
@@ -176,7 +199,32 @@ public sealed class MainForm : Form
             ForeColor = Color.FromArgb(220, 220, 220)
         };
 
+        // Panel de interpretacion de valores (abajo).
+        var interpPanel = new Panel { Dock = DockStyle.Bottom, Height = 150 };
+        var lblInterp = new Label
+        {
+            Dock = DockStyle.Top,
+            Height = 20,
+            Text = "Interpretacion de los primeros bytes de la direccion:",
+            Padding = new Padding(4, 3, 0, 0),
+            ForeColor = Color.Gray
+        };
+        _txtInterp = new TextBox
+        {
+            Dock = DockStyle.Fill,
+            Multiline = true,
+            ReadOnly = true,
+            ScrollBars = ScrollBars.Vertical,
+            WordWrap = false,
+            Font = Mono,
+            BackColor = Color.FromArgb(30, 30, 30),
+            ForeColor = Color.FromArgb(180, 220, 180)
+        };
+        interpPanel.Controls.Add(_txtInterp);
+        interpPanel.Controls.Add(lblInterp);
+
         page.Controls.Add(_hexView);
+        page.Controls.Add(interpPanel);
         page.Controls.Add(bar);
         return page;
     }
@@ -186,13 +234,24 @@ public sealed class MainForm : Form
         var page = new TabPage("Buscar en memoria");
         var bar = new Panel { Dock = DockStyle.Top, Height = 34 };
 
-        var lbl = new Label { Text = "Texto:", Left = 4, Top = 9, Width = 45 };
-        txtSearch = new TextBox { Left = 50, Top = 6, Width = 320, Font = Mono };
-        btnSearch = new Button { Text = "Buscar", Left = 378, Top = 4, Width = 90 };
+        var lblType = new Label { Text = "Tipo:", Left = 4, Top = 9, Width = 38 };
+        _cmbSearchType = new ComboBox
+        {
+            Left = 44, Top = 6, Width = 100,
+            DropDownStyle = ComboBoxStyle.DropDownList
+        };
+        _cmbSearchType.Items.AddRange(new object[] { "Texto", "Int32", "Int64", "Float", "Double", "Bytes hex" });
+        _cmbSearchType.SelectedIndex = 0;
+
+        var lbl = new Label { Text = "Valor:", Left = 150, Top = 9, Width = 45 };
+        txtSearch = new TextBox { Left = 196, Top = 6, Width = 260, Font = Mono };
+        btnSearch = new Button { Text = "Buscar", Left = 462, Top = 4, Width = 84 };
         var localBtn = btnSearch;
         btnSearch.Click += (_, _) => ToggleSearch();
+        var btnCsv = new Button { Text = "Exportar CSV...", Left = 552, Top = 4, Width = 120 };
+        btnCsv.Click += (_, _) => ExportResultsCsv();
 
-        bar.Controls.AddRange(new Control[] { lbl, txtSearch, localBtn });
+        bar.Controls.AddRange(new Control[] { lblType, _cmbSearchType, lbl, txtSearch, localBtn, btnCsv });
 
         lvResults = new ListView
         {
@@ -203,8 +262,8 @@ public sealed class MainForm : Form
             MultiSelect = false
         };
         lvResults.Columns.Add("Direccion", 170);
-        lvResults.Columns.Add("Codificacion", 110);
-        lvResults.Columns.Add("Coincidencia", 400);
+        lvResults.Columns.Add("Tipo", 110);
+        lvResults.Columns.Add("Valor", 400);
         var localResults = lvResults;
         lvResults.DoubleClick += (_, _) => JumpToResult(localResults);
 
@@ -220,6 +279,38 @@ public sealed class MainForm : Form
         page.Controls.Add(lvResults);
         page.Controls.Add(hint);
         page.Controls.Add(bar);
+        return page;
+    }
+
+    private TabPage BuildModulesTab()
+    {
+        var page = new TabPage("Modulos");
+
+        _lvModules = new ListView
+        {
+            Dock = DockStyle.Fill,
+            View = View.Details,
+            FullRowSelect = true,
+            GridLines = true,
+            MultiSelect = false
+        };
+        _lvModules.Columns.Add("Direccion base", 150);
+        _lvModules.Columns.Add("Tamano", 90);
+        _lvModules.Columns.Add("Modulo", 180);
+        _lvModules.Columns.Add("Ruta", 460);
+        _lvModules.DoubleClick += (_, _) => JumpToModule();
+
+        var hint = new Label
+        {
+            Dock = DockStyle.Bottom,
+            Height = 22,
+            Text = "Doble clic en un modulo para ir a su direccion base en el visor hexadecimal.",
+            ForeColor = Color.Gray,
+            Padding = new Padding(4, 2, 0, 0)
+        };
+
+        page.Controls.Add(_lvModules);
+        page.Controls.Add(hint);
         return page;
     }
 
@@ -276,13 +367,23 @@ public sealed class MainForm : Form
         int pid = (int)_lvProcesses.SelectedItems[0].Tag!;
         string name = _lvProcesses.SelectedItems[0].SubItems[1].Text;
 
+        // Al cambiar de proceso, paramos el auto-refresco.
+        _chkAutoRefresh.Checked = false;
+
         try
         {
             _reader?.Dispose();
             _reader = new ProcessMemoryReader(pid);
-            _lblProcess.Text = $"Proceso abierto: {name} (PID {pid})";
+
+            string arch = _reader.IsTargetWow64() ? "x86 (WOW64)" : "x64";
+            string? path = _reader.GetProcessPath();
+            _lblProcess.Text = $"Proceso: {name} (PID {pid})  |  {arch}"
+                + (string.IsNullOrEmpty(path) ? "" : $"  |  {path}");
+
             EnumerateRegions();
+            LoadModules();
             _txtHex.Text = string.Empty;
+            _txtInterp.Text = string.Empty;
             _lvResults.Items.Clear();
         }
         catch (Win32Exception ex)
@@ -290,6 +391,7 @@ public sealed class MainForm : Form
             _reader = null;
             _lblProcess.Text = "Ningun proceso abierto.";
             _lvRegions.Items.Clear();
+            _lvModules.Items.Clear();
             MessageBox.Show(ex.Message, "No se pudo abrir el proceso",
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
             _status.Text = $"Fallo al abrir PID {pid}.";
@@ -365,11 +467,14 @@ public sealed class MainForm : Form
         {
             byte[] data = _reader.ReadBytes(address, size);
             _txtHex.Text = HexFormatter.Format(data, address);
+            _txtInterp.Text = ValueInterpreter.Describe(data);
             _status.Text = $"Leidos {data.Length} bytes desde 0x{address:X}.";
         }
         catch (Win32Exception ex)
         {
             _txtHex.Text = string.Empty;
+            _txtInterp.Text = string.Empty;
+            _chkAutoRefresh.Checked = false; // Evita reintentos en bucle si falla.
             _status.Text = ex.Message;
         }
     }
@@ -397,7 +502,30 @@ public sealed class MainForm : Form
         string needle = _txtSearch.Text;
         if (string.IsNullOrEmpty(needle))
         {
-            _status.Text = "Escribe el texto a buscar.";
+            _status.Text = "Escribe el valor a buscar.";
+            return;
+        }
+
+        string kind = _cmbSearchType.SelectedItem?.ToString() ?? "Texto";
+        List<(byte[] pattern, string label, string preview)> patterns;
+        try
+        {
+            if (kind == "Texto")
+            {
+                patterns = new()
+                {
+                    (System.Text.Encoding.Latin1.GetBytes(needle), "ASCII", needle),
+                    (System.Text.Encoding.Unicode.GetBytes(needle), "UTF-16", needle),
+                };
+            }
+            else
+            {
+                patterns = new() { ValueInterpreter.BuildPattern(kind, needle) };
+            }
+        }
+        catch (Exception ex)
+        {
+            _status.Text = $"Valor invalido para el tipo {kind}: {ex.Message}";
             return;
         }
 
@@ -413,7 +541,7 @@ public sealed class MainForm : Form
         try
         {
             List<SearchHit> hits = await Task.Run(
-                () => reader.SearchString(needle, maxHits, progress, ct), ct);
+                () => reader.SearchPatterns(patterns, maxHits, progress, ct), ct);
 
             _lvResults.BeginUpdate();
             foreach (var h in hits)
@@ -486,6 +614,172 @@ public sealed class MainForm : Form
         catch (Exception ex)
         {
             _status.Text = "Error al volcar: " + ex.Message;
+        }
+    }
+
+    // ---------------- Modulos ----------------
+
+    private void LoadModules()
+    {
+        if (_reader == null) return;
+        _lvModules.BeginUpdate();
+        _lvModules.Items.Clear();
+        try
+        {
+            var mods = _reader.EnumerateModules();
+            foreach (var m in mods)
+            {
+                var item = new ListViewItem(m.BaseText) { Tag = m.BaseAddress };
+                item.SubItems.Add(m.SizeText);
+                item.SubItems.Add(m.Name);
+                item.SubItems.Add(m.Path);
+                _lvModules.Items.Add(item);
+            }
+            if (mods.Count == 0)
+                _status.Text = "No se pudieron enumerar modulos (proceso protegido o de otra arquitectura).";
+        }
+        finally
+        {
+            _lvModules.EndUpdate();
+        }
+    }
+
+    private void JumpToModule()
+    {
+        if (_reader == null || _lvModules.SelectedItems.Count == 0) return;
+        ulong baseAddr = (ulong)_lvModules.SelectedItems[0].Tag!;
+        _txtAddress.Text = "0x" + baseAddr.ToString("X");
+        _txtSize.Text = "512";
+        ReadHexAtAddress();
+        if (_txtHex.Parent is TabPage page && page.Parent is TabControl tc)
+            tc.SelectedTab = page;
+    }
+
+    // ---------------- Copiar / exportar ----------------
+
+    private void CopyHexToClipboard()
+    {
+        if (string.IsNullOrEmpty(_txtHex.Text))
+        {
+            _status.Text = "No hay nada que copiar.";
+            return;
+        }
+        try
+        {
+            Clipboard.SetText(_txtHex.Text);
+            _status.Text = "Volcado copiado al portapapeles.";
+        }
+        catch (Exception ex)
+        {
+            _status.Text = "No se pudo copiar: " + ex.Message;
+        }
+    }
+
+    private void ExportHexToFile()
+    {
+        if (string.IsNullOrEmpty(_txtHex.Text))
+        {
+            _status.Text = "No hay nada que exportar.";
+            return;
+        }
+        using var sfd = new SaveFileDialog
+        {
+            Title = "Guardar volcado hexadecimal",
+            FileName = "volcado.txt",
+            Filter = "Texto (*.txt)|*.txt|Todos los archivos (*.*)|*.*"
+        };
+        if (sfd.ShowDialog(this) != DialogResult.OK) return;
+        try
+        {
+            File.WriteAllText(sfd.FileName, _txtHex.Text);
+            _status.Text = "Guardado en " + sfd.FileName;
+        }
+        catch (Exception ex)
+        {
+            _status.Text = "Error al guardar: " + ex.Message;
+        }
+    }
+
+    private void ExportResultsCsv()
+    {
+        if (_lvResults.Items.Count == 0)
+        {
+            _status.Text = "No hay resultados que exportar.";
+            return;
+        }
+        using var sfd = new SaveFileDialog
+        {
+            Title = "Guardar resultados de la busqueda",
+            FileName = "resultados.csv",
+            Filter = "CSV (*.csv)|*.csv|Todos los archivos (*.*)|*.*"
+        };
+        if (sfd.ShowDialog(this) != DialogResult.OK) return;
+        try
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("direccion,tipo,valor");
+            foreach (ListViewItem it in _lvResults.Items)
+            {
+                string val = it.SubItems[2].Text.Replace("\"", "\"\"");
+                sb.AppendLine($"{it.Text},{it.SubItems[1].Text},\"{val}\"");
+            }
+            File.WriteAllText(sfd.FileName, sb.ToString());
+            _status.Text = "Guardado en " + sfd.FileName;
+        }
+        catch (Exception ex)
+        {
+            _status.Text = "Error al guardar: " + ex.Message;
+        }
+    }
+
+    // ---------------- Volcado completo ----------------
+
+    private async void DumpAllRegions()
+    {
+        if (_reader == null)
+        {
+            _status.Text = "Abre un proceso primero.";
+            return;
+        }
+        using var fbd = new FolderBrowserDialog
+        {
+            Description = "Elige la carpeta donde volcar todas las regiones legibles"
+        };
+        if (fbd.ShowDialog(this) != DialogResult.OK) return;
+
+        string folder = fbd.SelectedPath;
+        var reader = _reader;
+        using var cts = new CancellationTokenSource();
+        var progress = new Progress<string>(m => _status.Text = m);
+        try
+        {
+            var (files, bytes) = await Task.Run(
+                () => reader.DumpAllReadableRegions(folder, progress, cts.Token), cts.Token);
+            _status.Text = $"Volcados {files} archivos ({FormatBytes((ulong)bytes)}) en {folder}.";
+        }
+        catch (Exception ex)
+        {
+            _status.Text = "Error al volcar: " + ex.Message;
+        }
+    }
+
+    // ---------------- Auto-refresco ----------------
+
+    private void ToggleAutoRefresh()
+    {
+        if (_chkAutoRefresh.Checked)
+        {
+            if (_reader == null)
+            {
+                _chkAutoRefresh.Checked = false;
+                _status.Text = "Abre un proceso primero.";
+                return;
+            }
+            _refreshTimer.Start();
+        }
+        else
+        {
+            _refreshTimer.Stop();
         }
     }
 
