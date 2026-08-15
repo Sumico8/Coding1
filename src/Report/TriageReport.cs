@@ -17,6 +17,11 @@ public sealed class TriageReport
     public string? Path { get; set; }
     public string Architecture { get; set; } = "";
     public bool AnalyzerElevated { get; set; }
+    public int ParentPid { get; set; }
+    public string ParentName { get; set; } = "";
+    public string CommandLine { get; set; } = "";
+    public int SessionId { get; set; }
+    public string StartTime { get; set; } = "";
 
     public int RegionCount { get; set; }
     public ulong CommittedBytes { get; set; }

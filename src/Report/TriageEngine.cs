@@ -30,6 +30,13 @@ public static class TriageEngine
             AnalyzerElevated = Program.IsElevated(),
         };
 
+        var info = ProcessInfo.Get(reader.ProcessId);
+        r.ParentPid = info.ParentPid;
+        r.ParentName = info.ParentName;
+        r.CommandLine = info.CommandLine;
+        r.SessionId = info.SessionId;
+        r.StartTime = info.StartTime;
+
         progress?.Report("Enumerando regiones...");
         var regions = reader.EnumerateRegions(onlyReadable: false);
         ulong committed = 0;

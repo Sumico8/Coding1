@@ -23,6 +23,10 @@ public static class HtmlReportWriter
         Meta(sb, "Proceso", $"{E(r.ProcessName)} (PID {r.Pid})");
         Meta(sb, "Arquitectura", E(r.Architecture));
         if (!string.IsNullOrEmpty(r.Path)) Meta(sb, "Ruta", E(r.Path!));
+        if (r.ParentPid > 0) Meta(sb, "Padre", $"{E(r.ParentName)} (PID {r.ParentPid})");
+        if (r.SessionId >= 0) Meta(sb, "Sesion", r.SessionId.ToString());
+        if (!string.IsNullOrEmpty(r.StartTime)) Meta(sb, "Inicio", E(r.StartTime));
+        if (!string.IsNullOrEmpty(r.CommandLine)) Meta(sb, "Linea de comandos", E(r.CommandLine));
         Meta(sb, "Analizador elevado", r.AnalyzerElevated ? "si" : "no");
         Meta(sb, "Generado (UTC)", E(r.GeneratedUtc));
         Meta(sb, "Version", E(r.Tool + " " + r.ToolVersion));

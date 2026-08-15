@@ -2014,6 +2014,8 @@ public sealed class MainForm : Form
             var sb = new StringBuilder();
             sb.AppendLine($"Proceso: {report.ProcessName} (PID {report.Pid})  |  {report.Architecture}");
             if (!string.IsNullOrEmpty(report.Path)) sb.AppendLine($"Ruta: {report.Path}");
+            if (report.ParentPid > 0) sb.AppendLine($"Padre: {report.ParentName} (PID {report.ParentPid})   Sesion: {report.SessionId}");
+            if (!string.IsNullOrEmpty(report.CommandLine)) sb.AppendLine($"Linea de comandos: {report.CommandLine}");
             sb.AppendLine($"Generado (UTC): {report.GeneratedUtc}");
             sb.AppendLine();
             sb.AppendLine($"Regiones (commit): {report.RegionCount:N0}   Memoria: {FormatBytes(report.CommittedBytes)}");

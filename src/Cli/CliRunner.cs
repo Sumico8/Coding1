@@ -78,6 +78,8 @@ internal static class CliRunner
                 case "scan-all":
                 case "scanall":
                     return CmdScanAll(opts, elevated);
+                case "info":
+                    return CmdInfo(opts, elevated);
                 default:
                     Console.Error.WriteLine(
                         $"Verbo desconocido: '{verb}'. Ejecuta 'MemReader.exe help' para ver el uso.");
@@ -446,6 +448,27 @@ internal static class CliRunner
         return 0;
     }
 
+    private static int CmdInfo(Dictionary<string, string> opts, bool elevated)
+    {
+        int pid = RequirePid(opts);
+        WarnIfNotElevated(elevated);
+        var d = ProcessInfo.Get(pid);
+
+        var sb = new StringBuilder();
+        sb.AppendLine("field,value");
+        sb.AppendLine($"pid,{d.Pid}");
+        sb.AppendLine($"parent_pid,{d.ParentPid}");
+        sb.AppendLine($"parent_name,{Csv(d.ParentName)}");
+        sb.AppendLine($"session,{d.SessionId}");
+        sb.AppendLine($"start,{Csv(d.StartTime)}");
+        sb.AppendLine($"command_line,{Csv(d.CommandLine)}");
+        WriteOutput(sb.ToString(), Get(opts, "out"));
+
+        Console.Error.WriteLine($"pid {d.Pid} <- padre {d.ParentPid} ({d.ParentName}); sesion {d.SessionId}; inicio {d.StartTime}.");
+        if (!string.IsNullOrEmpty(d.CommandLine)) Console.Error.WriteLine("  cmdline: " + d.CommandLine);
+        return 0;
+    }
+
     private static int PrintHelp()
     {
         Console.WriteLine(
@@ -489,6 +512,8 @@ VERBOS:
             Lista los handles (ficheros, claves, mutex...) del proceso.
   scan-all  [--filter <txt>] [--out <archivo.csv>]
             Triage ligero de todos los procesos, ordenados por sospecha.
+  info      --pid <N> [--out <archivo.csv>]
+            Linea de comandos, PID padre, sesion y hora de inicio.
   version   Muestra la version.
   help      Muestra esta ayuda.
 

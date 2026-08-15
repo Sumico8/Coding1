@@ -220,6 +220,17 @@ internal static class NativeMethods
     [DllImport("kernel32.dll")]
     public static extern IntPtr GetCurrentProcess();
 
+    // ---- Informacion de proceso (ntdll) ----
+    // ProcessBasicInformation (0) da el PID padre; ProcessCommandLineInformation
+    // (60, Win8.1+) da la linea de comandos. Solo consulta, sin escribir nada.
+    public const int ProcessBasicInformation = 0;
+    public const int ProcessCommandLineInformation = 60;
+
+    [DllImport("ntdll.dll")]
+    public static extern uint NtQueryInformationProcess(
+        IntPtr processHandle, int processInformationClass, IntPtr processInformation,
+        int processInformationLength, out int returnLength);
+
     /// <summary>Devuelve true si la proteccion de la pagina permite lectura.</summary>
     public static bool IsReadable(uint protect)
     {
