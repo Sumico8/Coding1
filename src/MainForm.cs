@@ -72,6 +72,8 @@ public sealed class MainForm : Form
     private ListView _lvDiff = null!;
     private byte[]? _snapA;
     private ulong _snapABase;
+    private ListView _lvMachine = null!;
+    private CancellationTokenSource? _machineCts;
     private readonly System.Windows.Forms.Timer _refreshTimer;
 
     private ProcessMemoryReader? _reader;
@@ -185,6 +187,7 @@ public sealed class MainForm : Form
         tabs.TabPages.Add(BuildHooksTab());
         tabs.TabPages.Add(BuildHandlesTab());
         tabs.TabPages.Add(BuildDiffTab());
+        tabs.TabPages.Add(BuildMachineTab());
         tabs.TabPages.Add(BuildInformeTab());
         split2.Panel2.Controls.Add(tabs);
 
@@ -232,6 +235,7 @@ public sealed class MainForm : Form
             _integCts?.Cancel();
             _hookCts?.Cancel();
             _handlesCts?.Cancel();
+            _machineCts?.Cancel();
             _reader?.Dispose();
         };
     }
@@ -991,6 +995,50 @@ public sealed class MainForm : Form
         return page;
     }
 
+    private TabPage BuildMachineTab()
+    {
+        var page = new TabPage("Maquina");
+        var bar = new Panel { Dock = DockStyle.Top, Height = 34 };
+        var btnGo = new Button { Text = "Triage de todos los procesos", Left = 4, Top = 4, Width = 210 };
+        btnGo.Click += (_, _) => _ = DoMachineScanAsync();
+        var btnStop = new Button { Text = "Detener", Left = 220, Top = 4, Width = 80 };
+        btnStop.Click += (_, _) => _machineCts?.Cancel();
+        var btnCsv = new Button { Text = "Exportar CSV...", Left = 306, Top = 4, Width = 120 };
+        btnCsv.Click += (_, _) => ExportMachineCsv();
+        bar.Controls.AddRange(new Control[] { btnGo, btnStop, btnCsv });
+
+        _lvMachine = new ListView
+        {
+            Dock = DockStyle.Fill,
+            View = View.Details,
+            FullRowSelect = true,
+            GridLines = true,
+            MultiSelect = false
+        };
+        _lvMachine.Columns.Add("Score", 60);
+        _lvMachine.Columns.Add("PID", 70);
+        _lvMachine.Columns.Add("Proceso", 220);
+        _lvMachine.Columns.Add("Arch", 60);
+        _lvMachine.Columns.Add("RWX", 60);
+        _lvMachine.Columns.Add("Exec no-img", 90);
+        _lvMachine.Columns.Add("Hilos susp.", 90);
+        _lvMachine.DoubleClick += (_, _) => OpenFromMachine();
+
+        var hint = new Label
+        {
+            Dock = DockStyle.Bottom,
+            Height = 22,
+            Text = "Triage ligero de la maquina. Doble clic abre el proceso para analizarlo en detalle. Score mayor = mas indicadores.",
+            ForeColor = Color.Gray,
+            Padding = new Padding(4, 2, 0, 0)
+        };
+
+        page.Controls.Add(_lvMachine);
+        page.Controls.Add(hint);
+        page.Controls.Add(bar);
+        return page;
+    }
+
     // ---------------- Procesos ----------------
 
     private void LoadProcesses()
@@ -1043,7 +1091,12 @@ public sealed class MainForm : Form
 
         int pid = (int)_lvProcesses.SelectedItems[0].Tag!;
         string name = _lvProcesses.SelectedItems[0].SubItems[1].Text;
+        OpenProcessByPid(pid, name);
+    }
 
+    /// <summary>Abre un proceso por PID en solo lectura y refresca las vistas.</summary>
+    private void OpenProcessByPid(int pid, string name)
+    {
         // Al cambiar de proceso, paramos el auto-refresco y cualquier escaneo.
         _chkAutoRefresh.Checked = false;
         _ptrCts?.Cancel();
@@ -2473,6 +2526,70 @@ public sealed class MainForm : Form
         ReadHexAtAddress();
         if (_txtHex.Parent is TabPage page && page.Parent is TabControl tc)
             tc.SelectedTab = page;
+    }
+
+    // ---------------- Triage de la maquina ----------------
+
+    private async Task DoMachineScanAsync()
+    {
+        _lvMachine.Items.Clear();
+        _machineCts = new CancellationTokenSource();
+        var ct = _machineCts.Token;
+        var progress = new Progress<string>(m => _status.Text = m);
+        try
+        {
+            var results = await Task.Run(() => BatchTriage.ScanAll(null, progress, ct), ct);
+            _lvMachine.BeginUpdate();
+            foreach (var r in results)
+            {
+                var it = new ListViewItem(r.Score.ToString()) { Tag = r.Pid };
+                it.SubItems.Add(r.Pid.ToString());
+                it.SubItems.Add(r.Name);
+                it.SubItems.Add(r.Arch);
+                it.SubItems.Add(r.RwxRegions.ToString());
+                it.SubItems.Add(r.UnbackedExec.ToString());
+                it.SubItems.Add(r.SuspiciousThreads.ToString());
+                if (r.Score >= 6) it.ForeColor = Color.Firebrick;
+                else if (r.Score > 0) it.ForeColor = Color.DarkGoldenrod;
+                _lvMachine.Items.Add(it);
+            }
+            _lvMachine.EndUpdate();
+            int flagged = results.Count(r => r.Score > 0);
+            _status.Text = $"{results.Count} procesos, {flagged} con indicadores.";
+        }
+        catch (OperationCanceledException) { _status.Text = "Triage cancelado."; }
+        catch (Exception ex) { _status.Text = "Error: " + ex.Message; }
+        finally { _machineCts?.Dispose(); _machineCts = null; }
+    }
+
+    private void OpenFromMachine()
+    {
+        if (_lvMachine.SelectedItems.Count == 0) return;
+        int pid = (int)_lvMachine.SelectedItems[0].Tag!;
+        string name = _lvMachine.SelectedItems[0].SubItems[2].Text;
+        OpenProcessByPid(pid, name);
+    }
+
+    private void ExportMachineCsv()
+    {
+        if (_lvMachine.Items.Count == 0) { _status.Text = "No hay resultados que exportar."; return; }
+        using var sfd = new SaveFileDialog
+        {
+            Title = "Guardar triage de la maquina",
+            FileName = "maquina.csv",
+            Filter = "CSV (*.csv)|*.csv|Todos los archivos (*.*)|*.*"
+        };
+        if (sfd.ShowDialog(this) != DialogResult.OK) return;
+        try
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("score,pid,proceso,arch,rwx,exec_no_img,hilos_susp");
+            foreach (ListViewItem it in _lvMachine.Items)
+                sb.AppendLine($"{it.Text},{it.SubItems[1].Text},{it.SubItems[2].Text},{it.SubItems[3].Text},{it.SubItems[4].Text},{it.SubItems[5].Text},{it.SubItems[6].Text}");
+            File.WriteAllText(sfd.FileName, sb.ToString());
+            _status.Text = "Guardado en " + sfd.FileName;
+        }
+        catch (Exception ex) { _status.Text = "Error al guardar: " + ex.Message; }
     }
 
     // ---------------- Utilidades ----------------

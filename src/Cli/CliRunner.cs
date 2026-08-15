@@ -75,6 +75,9 @@ internal static class CliRunner
                     return CmdHooks(opts, elevated);
                 case "handles":
                     return CmdHandles(opts, elevated);
+                case "scan-all":
+                case "scanall":
+                    return CmdScanAll(opts, elevated);
                 default:
                     Console.Error.WriteLine(
                         $"Verbo desconocido: '{verb}'. Ejecuta 'MemReader.exe help' para ver el uso.");
@@ -422,6 +425,27 @@ internal static class CliRunner
         return 0;
     }
 
+    private static int CmdScanAll(Dictionary<string, string> opts, bool elevated)
+    {
+        WarnIfNotElevated(elevated);
+        string? filter = Get(opts, "filter");
+        var progress = Progress(opts);
+        var results = BatchTriage.ScanAll(filter, progress, CancellationToken.None);
+        EndProgress();
+
+        var sb = new StringBuilder();
+        sb.AppendLine("pid,name,arch,rwx,unbacked_exec,suspicious_threads,score,error");
+        foreach (var r in results)
+            sb.AppendLine($"{r.Pid},{Csv(r.Name)},{r.Arch},{r.RwxRegions},{r.UnbackedExec},{r.SuspiciousThreads},{r.Score},{Csv(r.Error ?? "")}");
+        WriteOutput(sb.ToString(), Get(opts, "out"));
+
+        int flagged = results.Count(r => r.Score > 0);
+        Console.Error.WriteLine($"{results.Count} procesos, {flagged} con indicadores. Mas sospechosos:");
+        foreach (var r in results.Where(r => r.Score > 0).Take(10))
+            Console.Error.WriteLine($"  [{r.Score}] {r.Name} (pid {r.Pid}): RWX={r.RwxRegions} exec-no-img={r.UnbackedExec} hilos={r.SuspiciousThreads}");
+        return 0;
+    }
+
     private static int PrintHelp()
     {
         Console.WriteLine(
@@ -463,6 +487,8 @@ VERBOS:
             Detecta hooks inline en exports de ntdll/kernel32/etc.
   handles   --pid <N> [--no-names] [--out <archivo.csv>]
             Lista los handles (ficheros, claves, mutex...) del proceso.
+  scan-all  [--filter <txt>] [--out <archivo.csv>]
+            Triage ligero de todos los procesos, ordenados por sospecha.
   version   Muestra la version.
   help      Muestra esta ayuda.
 
