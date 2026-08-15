@@ -4,8 +4,21 @@ namespace MemReader;
 
 internal static class Program
 {
+    /// <summary>
+    /// Punto de entrada. Sin argumentos abre la interfaz grafica de siempre.
+    /// Con argumentos entra en el modo CLI headless (automatizacion/scripting),
+    /// que sigue siendo estrictamente de solo lectura.
+    /// </summary>
     [STAThread]
-    private static void Main()
+    private static int Main(string[] args)
+    {
+        if (args.Length == 0)
+            return RunGui();
+
+        return CliRunner.Run(args);
+    }
+
+    private static int RunGui()
     {
         ApplicationConfiguration.Initialize();
 
@@ -28,9 +41,11 @@ internal static class Program
         }
 
         Application.Run(new MainForm());
+        return 0;
     }
 
-    private static bool IsElevated()
+    /// <summary>True si el proceso actual corre con privilegios de Administrador.</summary>
+    internal static bool IsElevated()
     {
         try
         {

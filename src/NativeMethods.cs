@@ -138,6 +138,35 @@ internal static class NativeMethods
         IntPtr threadHandle, int threadInformationClass,
         ref ulong threadInformation, int threadInformationLength, out int returnLength);
 
+    // ---- Consola para el modo CLI headless (kernel32) ----
+    // Permiten que un binario WinExe escriba en la consola que lo lanzo, o
+    // detectar si su salida esta redirigida a un archivo/tuberia. Es solo E/S
+    // de consola: nada que ver con leer la memoria de otros procesos.
+    public const int ATTACH_PARENT_PROCESS = -1;
+    public const int STD_OUTPUT_HANDLE = -11;
+    public const uint FILE_TYPE_UNKNOWN = 0x0000;
+    public const uint FILE_TYPE_DISK = 0x0001;
+    public const uint FILE_TYPE_CHAR = 0x0002;
+    public const uint FILE_TYPE_PIPE = 0x0003;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool AttachConsole(int dwProcessId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool AllocConsole();
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool FreeConsole();
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern IntPtr GetStdHandle(int nStdHandle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern uint GetFileType(IntPtr hFile);
+
     /// <summary>Devuelve true si la proteccion de la pagina permite lectura.</summary>
     public static bool IsReadable(uint protect)
     {
