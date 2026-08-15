@@ -67,6 +67,11 @@ public sealed class MainForm : Form
     private ListView _lvHandles = null!;
     private CheckBox _chkResolveNames = null!;
     private CancellationTokenSource? _handlesCts;
+    private TextBox _diffAddr = null!;
+    private TextBox _diffSize = null!;
+    private ListView _lvDiff = null!;
+    private byte[]? _snapA;
+    private ulong _snapABase;
     private readonly System.Windows.Forms.Timer _refreshTimer;
 
     private ProcessMemoryReader? _reader;
@@ -179,6 +184,7 @@ public sealed class MainForm : Form
         tabs.TabPages.Add(BuildIntegrityTab());
         tabs.TabPages.Add(BuildHooksTab());
         tabs.TabPages.Add(BuildHandlesTab());
+        tabs.TabPages.Add(BuildDiffTab());
         tabs.TabPages.Add(BuildInformeTab());
         split2.Panel2.Controls.Add(tabs);
 
@@ -938,6 +944,48 @@ public sealed class MainForm : Form
         };
 
         page.Controls.Add(_lvHandles);
+        page.Controls.Add(hint);
+        page.Controls.Add(bar);
+        return page;
+    }
+
+    private TabPage BuildDiffTab()
+    {
+        var page = new TabPage("Diff");
+        var bar = new Panel { Dock = DockStyle.Top, Height = 34 };
+        var lblA = new Label { Text = "Direccion (hex):", Left = 4, Top = 9, Width = 100 };
+        _diffAddr = new TextBox { Left = 106, Top = 6, Width = 160, Font = Mono };
+        var lblS = new Label { Text = "Bytes:", Left = 276, Top = 9, Width = 45 };
+        _diffSize = new TextBox { Left = 322, Top = 6, Width = 80, Text = "4096", Font = Mono };
+        var btnA = new Button { Text = "Capturar A", Left = 412, Top = 4, Width = 110 };
+        btnA.Click += (_, _) => CaptureSnapshotA();
+        var btnB = new Button { Text = "Comparar (recaptura)", Left = 528, Top = 4, Width = 170 };
+        btnB.Click += (_, _) => CompareSnapshotB();
+        bar.Controls.AddRange(new Control[] { lblA, _diffAddr, lblS, _diffSize, btnA, btnB });
+
+        _lvDiff = new ListView
+        {
+            Dock = DockStyle.Fill,
+            View = View.Details,
+            FullRowSelect = true,
+            GridLines = true,
+            MultiSelect = false
+        };
+        _lvDiff.Columns.Add("Direccion", 160);
+        _lvDiff.Columns.Add("Antes", 320);
+        _lvDiff.Columns.Add("Despues", 320);
+        _lvDiff.DoubleClick += (_, _) => JumpFromDiff();
+
+        var hint = new Label
+        {
+            Dock = DockStyle.Bottom,
+            Height = 22,
+            Text = "Captura A, deja que la app cambie, y pulsa Comparar para ver los bytes que cambiaron. Doble clic para ver la direccion.",
+            ForeColor = Color.Gray,
+            Padding = new Padding(4, 2, 0, 0)
+        };
+
+        page.Controls.Add(_lvDiff);
         page.Controls.Add(hint);
         page.Controls.Add(bar);
         return page;
@@ -1706,7 +1754,12 @@ public sealed class MainForm : Form
         try
         {
             byte[] code = _reader.ReadBytes(addr, Math.Min(count * 16, 65536));
-            _txtDisasm.Text = Disassembler.Disassemble(code, addr, bitness, count);
+            Func<ulong, string?> resolve = a =>
+            {
+                var m = _scanner?.ResolveModuleOffset(a);
+                return m != null ? $"{m.Value.mod.Name}+0x{m.Value.offset:X}" : null;
+            };
+            _txtDisasm.Text = Disassembler.Disassemble(code, addr, bitness, count, resolve);
             _status.Text = $"Desensamblado desde 0x{addr:X} ({bitness} bits).";
         }
         catch (Win32Exception ex)
@@ -2367,6 +2420,59 @@ public sealed class MainForm : Form
             _status.Text = "Guardado en " + sfd.FileName;
         }
         catch (Exception ex) { _status.Text = "Error al guardar: " + ex.Message; }
+    }
+
+    // ---------------- Diff de snapshots ----------------
+
+    private void CaptureSnapshotA()
+    {
+        if (_reader == null) { _status.Text = "Abre un proceso primero."; return; }
+        if (!TryParseAddress(_diffAddr.Text, out ulong addr)) { _status.Text = "Direccion invalida (hex)."; return; }
+        if (!int.TryParse(_diffSize.Text.Trim(), out int size) || size <= 0) { _status.Text = "Tamano invalido."; return; }
+        size = Math.Min(size, 4 << 20);
+        try
+        {
+            _snapA = _reader.ReadBytes(addr, size);
+            _snapABase = addr;
+            _lvDiff.Items.Clear();
+            _status.Text = $"Captura A: {_snapA.Length} bytes desde 0x{addr:X}. Provoca el cambio y pulsa Comparar.";
+        }
+        catch (Win32Exception ex) { _status.Text = ex.Message; }
+    }
+
+    private void CompareSnapshotB()
+    {
+        if (_reader == null) { _status.Text = "Abre un proceso primero."; return; }
+        if (_snapA == null) { _status.Text = "Primero pulsa 'Capturar A'."; return; }
+        try
+        {
+            byte[] b = _reader.ReadBytes(_snapABase, _snapA.Length);
+            var runs = SnapshotDiff.Diff(_snapA, b, _snapABase);
+            int changed = SnapshotDiff.CountChanged(_snapA, b);
+            _lvDiff.BeginUpdate();
+            _lvDiff.Items.Clear();
+            foreach (var r in runs)
+            {
+                var it = new ListViewItem(r.AddressText) { Tag = r.Address };
+                it.SubItems.Add(r.BeforeHex.Length > 200 ? r.BeforeHex[..200] : r.BeforeHex);
+                it.SubItems.Add(r.AfterHex.Length > 200 ? r.AfterHex[..200] : r.AfterHex);
+                _lvDiff.Items.Add(it);
+            }
+            _lvDiff.EndUpdate();
+            _status.Text = $"{changed} bytes cambiaron en {runs.Count} tramos.";
+        }
+        catch (Win32Exception ex) { _status.Text = ex.Message; }
+    }
+
+    private void JumpFromDiff()
+    {
+        if (_reader == null || _lvDiff.SelectedItems.Count == 0) return;
+        ulong addr = (ulong)_lvDiff.SelectedItems[0].Tag!;
+        _txtAddress.Text = "0x" + addr.ToString("X");
+        _txtSize.Text = "128";
+        ReadHexAtAddress();
+        if (_txtHex.Parent is TabPage page && page.Parent is TabControl tc)
+            tc.SelectedTab = page;
     }
 
     // ---------------- Utilidades ----------------
