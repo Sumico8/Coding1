@@ -54,9 +54,10 @@ procesos que tú abras. Es una aplicación de escritorio (WinForms, .NET 8) que:
 - **Integridad de módulos (anti-hollowing)**: compara el código en memoria con el
   archivo en disco (aplicando las relocations a una copia propia, para no confundir
   ASLR con manipulación) y marca posibles parches o *process hollowing*.
-- **Detección de hooks inline**: marca los exports de `ntdll`/`kernel32`/… cuyo
-  prólogo empieza con un salto (hook de EDR/AV o inyección), resolviendo a qué
-  módulo apuntan. Es solo detección: no quita hooks ni "limpia" DLLs.
+- **Detección de hooks (inline + IAT)**: marca exports de `ntdll`/`kernel32`/… cuyo
+  prólogo empieza con un salto, **y** entradas de la tabla de importación (IAT) que
+  apuntan fuera de todo módulo — ambos indicio de hook de EDR/AV o inyección. Es solo
+  detección: no quita hooks ni "limpia" DLLs.
 - **Hashing de módulos**: SHA-256 del archivo en disco de cada módulo, con URL de
   VirusTotal copiable (sin conexiones de red automáticas).
 - **Enumeración de handles**: ficheros, claves, *mutex* y eventos que abre el
@@ -276,6 +277,7 @@ src/PeImage.cs                Parser PE (secciones, imports/exports/TLS)
 src/PeAnalyzer.cs             Análisis PE en memoria + anomalías
 src/IntegrityScanner.cs       Integridad de módulos (anti-hollowing)
 src/HookScanner.cs            Detección de hooks inline
+src/IatHookScanner.cs         Detección de hooks de IAT
 src/HandleInspector.cs        Enumeración de handles/mutex
 src/ModuleHasher.cs           SHA-256 de módulos + URL de VirusTotal
 src/IocExtractor.cs           Extracción de IOCs
