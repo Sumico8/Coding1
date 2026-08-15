@@ -82,6 +82,119 @@ public sealed class PeImage
         return null;
     }
 
+    /// <summary>Nombres exportados y su RVA (export directory leido de memoria).</summary>
+    public List<(string name, uint rva)> EnumerateExports(
+        ProcessMemoryReader reader, ulong baseAddr, int max = 10000)
+    {
+        var list = new List<(string, uint)>();
+        var (dirRva, _) = Directory(DIR_EXPORT);
+        if (dirRva == 0) return list;
+
+        byte[] d;
+        try { d = reader.ReadBytes(baseAddr + dirRva, 40); }
+        catch { return list; }
+        if (d.Length < 40) return list;
+
+        uint numberOfFunctions = BitConverter.ToUInt32(d, 20);
+        uint numberOfNames = BitConverter.ToUInt32(d, 24);
+        uint addrOfFunctions = BitConverter.ToUInt32(d, 28);
+        uint addrOfNames = BitConverter.ToUInt32(d, 32);
+        uint addrOfOrdinals = BitConverter.ToUInt32(d, 36);
+        if (numberOfNames == 0 || numberOfNames > 200000) return list;
+
+        int count = (int)Math.Min(numberOfNames, (uint)max);
+        byte[] namePtrs, ords, funcs;
+        try
+        {
+            namePtrs = reader.ReadBytes(baseAddr + addrOfNames, count * 4);
+            ords = reader.ReadBytes(baseAddr + addrOfOrdinals, count * 2);
+            funcs = reader.ReadBytes(baseAddr + addrOfFunctions, (int)Math.Min(numberOfFunctions, 200000u) * 4);
+        }
+        catch { return list; }
+
+        for (int i = 0; i < count; i++)
+        {
+            if (i * 4 + 4 > namePtrs.Length) break;
+            uint nameRva = BitConverter.ToUInt32(namePtrs, i * 4);
+            string name = ReadCString(reader, baseAddr + nameRva, 256);
+            if (name.Length == 0) continue;
+            ushort ord = (i * 2 + 2 <= ords.Length) ? BitConverter.ToUInt16(ords, i * 2) : (ushort)i;
+            uint funcRva = (ord * 4 + 4 <= funcs.Length) ? BitConverter.ToUInt32(funcs, ord * 4) : 0;
+            list.Add((name, funcRva));
+        }
+        return list;
+    }
+
+    /// <summary>Nombres de las DLL importadas (import directory leido de memoria).</summary>
+    public List<string> EnumerateImportedModules(
+        ProcessMemoryReader reader, ulong baseAddr, int max = 1000)
+    {
+        var list = new List<string>();
+        var (dirRva, _) = Directory(DIR_IMPORT);
+        if (dirRva == 0) return list;
+
+        for (int i = 0; i < max; i++)
+        {
+            byte[] desc;
+            try { desc = reader.ReadBytes(baseAddr + dirRva + (uint)(i * 20), 20); }
+            catch { break; }
+            if (desc.Length < 20) break;
+
+            bool allZero = true;
+            for (int k = 0; k < 20; k++) if (desc[k] != 0) { allZero = false; break; }
+            if (allZero) break;
+
+            uint nameRva = BitConverter.ToUInt32(desc, 12);
+            if (nameRva == 0) continue;
+            string name = ReadCString(reader, baseAddr + nameRva, 256);
+            if (name.Length > 0) list.Add(name);
+        }
+        return list;
+    }
+
+    /// <summary>Direcciones (VA) de los TLS callbacks, si el modulo define TLS.</summary>
+    public List<ulong> EnumerateTlsCallbacks(
+        ProcessMemoryReader reader, ulong baseAddr, int max = 64)
+    {
+        var list = new List<ulong>();
+        var (dirRva, _) = Directory(DIR_TLS);
+        if (dirRva == 0) return list;
+
+        int ptr = Is64Bit ? 8 : 4;
+        int cbOff = Is64Bit ? 24 : 12; // AddressOfCallBacks dentro del TLS directory
+        byte[] tls;
+        try { tls = reader.ReadBytes(baseAddr + dirRva, cbOff + ptr); }
+        catch { return list; }
+        if (tls.Length < cbOff + ptr) return list;
+
+        ulong cbArray = Is64Bit ? BitConverter.ToUInt64(tls, cbOff) : BitConverter.ToUInt32(tls, cbOff);
+        if (cbArray == 0) return list;
+
+        for (int i = 0; i < max; i++)
+        {
+            byte[] p;
+            try { p = reader.ReadBytes(cbArray + (ulong)(i * ptr), ptr); }
+            catch { break; }
+            if (p.Length < ptr) break;
+            ulong cb = Is64Bit ? BitConverter.ToUInt64(p, 0) : BitConverter.ToUInt32(p, 0);
+            if (cb == 0) break;
+            list.Add(cb);
+        }
+        return list;
+    }
+
+    private static string ReadCString(ProcessMemoryReader reader, ulong addr, int maxLen)
+    {
+        byte[] b;
+        try { b = reader.ReadBytes(addr, maxLen); }
+        catch { return ""; }
+        int n = 0;
+        while (n < b.Length && b[n] != 0) n++;
+        var sb = new StringBuilder(n);
+        for (int i = 0; i < n; i++) sb.Append((char)b[i]);
+        return sb.ToString();
+    }
+
     /// <summary>Parsea desde un buffer que contiene al menos las cabeceras.</summary>
     public static PeImage? Parse(byte[] d)
     {

@@ -308,6 +308,28 @@ public sealed class ProcessMemoryReader : IDisposable
         return list.OrderBy(m => m.BaseAddress).ToList();
     }
 
+    /// <summary>
+    /// Escanea las regiones MEM_IMAGE y devuelve las bases donde hay una firma
+    /// "MZ". Detecta imagenes mapeadas (incluidas las manualmente mapeadas que
+    /// la lista de modulos del cargador no muestra). Solo lectura.
+    /// </summary>
+    public List<ulong> EnumerateImageRegions()
+    {
+        EnsureOpen();
+        var result = new List<ulong>();
+        var seen = new HashSet<ulong>();
+        foreach (var r in EnumerateRegions(onlyReadable: true))
+        {
+            if (r.Type != NativeMethods.MEM_IMAGE) continue;
+            byte[] head;
+            try { head = ReadBytes(r.BaseAddress, 2); }
+            catch { continue; }
+            if (head.Length < 2 || head[0] != 0x4D || head[1] != 0x5A) continue; // "MZ"
+            if (seen.Add(r.BaseAddress)) result.Add(r.BaseAddress);
+        }
+        return result;
+    }
+
     /// <summary>Ruta completa del ejecutable del proceso, si es accesible.</summary>
     public string? GetProcessPath()
     {
