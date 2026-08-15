@@ -17,6 +17,8 @@ de escritorio (WinForms, .NET 8) que:
 - Muestra la memoria en un **visor hexadecimal** (hex + ASCII).
 - **Panel de interpretación**: ve los bytes de una dirección como int8/16/32/64,
   float, double, puntero y cadena.
+- **Desensamblado x86/x64** (Iced): traduce los bytes de una dirección a
+  instrucciones de ensamblador, con selección automática de 32/64 bits.
 - **Búsqueda tipada**: por texto (ASCII y UTF-16), o por valor **Int32 / Int64 /
   Float / Double / bytes hex**. Útil para encontrar dónde vive un valor en *tu* app.
 - **Escaneo iterativo (next-scan)**: primer escaneo por valor y refinado sucesivo

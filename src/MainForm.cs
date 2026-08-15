@@ -47,6 +47,9 @@ public sealed class MainForm : Form
     private ListView _lvSecurity = null!;
     private CancellationTokenSource? _secCts;
     private ListView _lvThreads = null!;
+    private TextBox _disasmAddr = null!;
+    private TextBox _disasmCount = null!;
+    private TextBox _txtDisasm = null!;
     private readonly System.Windows.Forms.Timer _refreshTimer;
 
     private ProcessMemoryReader? _reader;
@@ -152,6 +155,7 @@ public sealed class MainForm : Form
         tabs.TabPages.Add(BuildStringsTab());
         tabs.TabPages.Add(BuildSecurityTab());
         tabs.TabPages.Add(BuildThreadsTab());
+        tabs.TabPages.Add(BuildDisasmTab());
         split2.Panel2.Controls.Add(tabs);
 
         // Temporizador para el auto-refresco del visor hexadecimal.
@@ -456,6 +460,37 @@ public sealed class MainForm : Form
 
         page.Controls.Add(_lvScan);
         page.Controls.Add(hint);
+        page.Controls.Add(bar);
+        return page;
+    }
+
+    private TabPage BuildDisasmTab()
+    {
+        var page = new TabPage("Desensamblado");
+        var bar = new Panel { Dock = DockStyle.Top, Height = 34 };
+
+        var lblA = new Label { Text = "Direccion (hex):", Left = 4, Top = 9, Width = 100 };
+        _disasmAddr = new TextBox { Left = 106, Top = 6, Width = 160, Font = Mono };
+        var lblC = new Label { Text = "Instr.:", Left = 276, Top = 9, Width = 45 };
+        _disasmCount = new TextBox { Left = 322, Top = 6, Width = 50, Text = "40", Font = Mono };
+        var btnGo = new Button { Text = "Desensamblar", Left = 384, Top = 4, Width = 120 };
+        btnGo.Click += (_, _) => DoDisassemble();
+
+        bar.Controls.AddRange(new Control[] { lblA, _disasmAddr, lblC, _disasmCount, btnGo });
+
+        _txtDisasm = new TextBox
+        {
+            Dock = DockStyle.Fill,
+            Multiline = true,
+            ReadOnly = true,
+            ScrollBars = ScrollBars.Both,
+            WordWrap = false,
+            Font = Mono,
+            BackColor = Color.FromArgb(24, 24, 24),
+            ForeColor = Color.FromArgb(220, 220, 180)
+        };
+
+        page.Controls.Add(_txtDisasm);
         page.Controls.Add(bar);
         return page;
     }
@@ -1323,6 +1358,28 @@ public sealed class MainForm : Form
         ReadHexAtAddress();
         if (_txtHex.Parent is TabPage page && page.Parent is TabControl tc)
             tc.SelectedTab = page;
+    }
+
+    // ---------------- Desensamblado ----------------
+
+    private void DoDisassemble()
+    {
+        if (_reader == null) { _status.Text = "Abre un proceso primero."; return; }
+        if (!TryParseAddress(_disasmAddr.Text, out ulong addr)) { _status.Text = "Direccion invalida (hex)."; return; }
+        if (!int.TryParse(_disasmCount.Text.Trim(), out int count) || count < 1) count = 40;
+        count = Math.Min(count, 1000);
+        int bitness = _reader.IsTargetWow64() ? 32 : 64;
+        try
+        {
+            byte[] code = _reader.ReadBytes(addr, Math.Min(count * 16, 65536));
+            _txtDisasm.Text = Disassembler.Disassemble(code, addr, bitness, count);
+            _status.Text = $"Desensamblado desde 0x{addr:X} ({bitness} bits).";
+        }
+        catch (Win32Exception ex)
+        {
+            _txtDisasm.Text = string.Empty;
+            _status.Text = ex.Message;
+        }
     }
 
     // ---------------- Seguridad ----------------
