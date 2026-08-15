@@ -46,6 +46,7 @@ public sealed class MainForm : Form
     private CancellationTokenSource? _scanCts;
     private ListView _lvSecurity = null!;
     private CancellationTokenSource? _secCts;
+    private ListView _lvThreads = null!;
     private readonly System.Windows.Forms.Timer _refreshTimer;
 
     private ProcessMemoryReader? _reader;
@@ -115,7 +116,9 @@ public sealed class MainForm : Form
         btnDumpAll.Click += (_, _) => DumpAllRegions();
         var btnMinidump = new Button { Text = "Minidump (.dmp)...", Left = 584, Top = 3, Width = 150 };
         btnMinidump.Click += (_, _) => WriteMinidump();
-        regionsBar.Controls.AddRange(new Control[] { _chkOnlyReadable, btnDump, btnDumpAll, btnMinidump });
+        var btnEntropy = new Button { Text = "Entropia", Left = 742, Top = 3, Width = 90 };
+        btnEntropy.Click += (_, _) => ComputeEntropy();
+        regionsBar.Controls.AddRange(new Control[] { _chkOnlyReadable, btnDump, btnDumpAll, btnMinidump, btnEntropy });
 
         _lvRegions = new ListView
         {
@@ -130,6 +133,7 @@ public sealed class MainForm : Form
         _lvRegions.Columns.Add("Tamano", 90);
         _lvRegions.Columns.Add("Proteccion", 90);
         _lvRegions.Columns.Add("Tipo", 90);
+        _lvRegions.Columns.Add("Entropia", 80);
         _lvRegions.SelectedIndexChanged += (_, _) => OnRegionSelected();
 
         var regionsHost = new Panel { Dock = DockStyle.Fill };
@@ -147,6 +151,7 @@ public sealed class MainForm : Form
         tabs.TabPages.Add(BuildScanTab());
         tabs.TabPages.Add(BuildStringsTab());
         tabs.TabPages.Add(BuildSecurityTab());
+        tabs.TabPages.Add(BuildThreadsTab());
         split2.Panel2.Controls.Add(tabs);
 
         // Temporizador para el auto-refresco del visor hexadecimal.
@@ -455,6 +460,43 @@ public sealed class MainForm : Form
         return page;
     }
 
+    private TabPage BuildThreadsTab()
+    {
+        var page = new TabPage("Hilos");
+        var bar = new Panel { Dock = DockStyle.Top, Height = 34 };
+        var btnGo = new Button { Text = "Listar hilos", Left = 4, Top = 4, Width = 120 };
+        btnGo.Click += (_, _) => ListThreads();
+        bar.Controls.Add(btnGo);
+
+        _lvThreads = new ListView
+        {
+            Dock = DockStyle.Fill,
+            View = View.Details,
+            FullRowSelect = true,
+            GridLines = true,
+            MultiSelect = false
+        };
+        _lvThreads.Columns.Add("TID", 90);
+        _lvThreads.Columns.Add("Direccion de inicio", 180);
+        _lvThreads.Columns.Add("Modulo de inicio", 260);
+        _lvThreads.Columns.Add("Prioridad", 80);
+        _lvThreads.DoubleClick += (_, _) => JumpFromThread();
+
+        var hint = new Label
+        {
+            Dock = DockStyle.Bottom,
+            Height = 22,
+            Text = "Un inicio '(dinamica)' fuera de todo modulo puede indicar codigo inyectado. Doble clic para verlo.",
+            ForeColor = Color.Gray,
+            Padding = new Padding(4, 2, 0, 0)
+        };
+
+        page.Controls.Add(_lvThreads);
+        page.Controls.Add(hint);
+        page.Controls.Add(bar);
+        return page;
+    }
+
     private TabPage BuildSecurityTab()
     {
         var page = new TabPage("Seguridad");
@@ -621,6 +663,7 @@ public sealed class MainForm : Form
             _lvStrings.Items.Clear();
             _lvScan.Items.Clear();
             _lvSecurity.Items.Clear();
+            _lvThreads.Items.Clear();
             _scanSession = null;
         }
         catch (Win32Exception ex)
@@ -635,6 +678,7 @@ public sealed class MainForm : Form
             _lvStrings.Items.Clear();
             _lvScan.Items.Clear();
             _lvSecurity.Items.Clear();
+            _lvThreads.Items.Clear();
             MessageBox.Show(ex.Message, "No se pudo abrir el proceso",
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
             _status.Text = $"Fallo al abrir PID {pid}.";
@@ -657,6 +701,7 @@ public sealed class MainForm : Form
                 item.SubItems.Add(r.SizeText);
                 item.SubItems.Add(r.ProtectText);
                 item.SubItems.Add(r.TypeText);
+                item.SubItems.Add(""); // entropia (se rellena bajo demanda)
                 _lvRegions.Items.Add(item);
             }
             ulong totalBytes = 0;
@@ -1201,6 +1246,79 @@ public sealed class MainForm : Form
         string hex = "0x" + addr.ToString("X");
         _ptrTarget.Text = hex; // lo deja listo para escanear rutas de puntero
         _txtAddress.Text = hex;
+        _txtSize.Text = "256";
+        ReadHexAtAddress();
+        if (_txtHex.Parent is TabPage page && page.Parent is TabControl tc)
+            tc.SelectedTab = page;
+    }
+
+    // ---------------- Entropia ----------------
+
+    private async void ComputeEntropy()
+    {
+        if (_reader == null || _regions.Count == 0) { _status.Text = "Enumera regiones primero."; return; }
+        var reader = _reader;
+        var regions = _regions.ToList();
+        _status.Text = "Calculando entropia (muestra de 64 KB/region)...";
+        try
+        {
+            double[] vals = await Task.Run(() =>
+            {
+                var arr = new double[regions.Count];
+                for (int i = 0; i < regions.Count; i++)
+                {
+                    int sample = (int)Math.Min(regions[i].RegionSize, (ulong)65536);
+                    try { arr[i] = EntropyAnalyzer.Shannon(reader.ReadBytes(regions[i].BaseAddress, sample)); }
+                    catch { arr[i] = -1; }
+                }
+                return arr;
+            });
+
+            for (int i = 0; i < _lvRegions.Items.Count && i < vals.Length; i++)
+            {
+                var it = _lvRegions.Items[i];
+                if (it.SubItems.Count > 4)
+                    it.SubItems[4].Text = vals[i] >= 0 ? vals[i].ToString("0.00") : "-";
+                if (vals[i] >= 7.2) it.ForeColor = Color.Firebrick; // posible empaquetado/cifrado
+            }
+            _status.Text = "Entropia calculada (rojo = >7.2, posible empaquetado/cifrado).";
+        }
+        catch (Exception ex) { _status.Text = "Error: " + ex.Message; }
+    }
+
+    // ---------------- Hilos ----------------
+
+    private void ListThreads()
+    {
+        if (_reader == null) { _status.Text = "Abre un proceso primero."; return; }
+        _lvThreads.BeginUpdate();
+        _lvThreads.Items.Clear();
+        try
+        {
+            var threads = ThreadInspector.Enumerate(_reader.ProcessId);
+            foreach (var t in threads)
+            {
+                var it = new ListViewItem(t.Tid.ToString()) { Tag = t.StartAddress };
+                it.SubItems.Add("0x" + t.StartAddress.ToString("X"));
+                var mod = _scanner?.ResolveModuleOffset(t.StartAddress);
+                string modText = mod != null ? $"{mod.Value.mod.Name}+0x{mod.Value.offset:X}" : "(dinamica)";
+                if (mod == null && t.StartAddress != 0) it.ForeColor = Color.Firebrick;
+                it.SubItems.Add(modText);
+                it.SubItems.Add(t.BasePriority.ToString());
+                _lvThreads.Items.Add(it);
+            }
+            _status.Text = $"{threads.Count} hilos.";
+        }
+        catch (Exception ex) { _status.Text = "Error: " + ex.Message; }
+        finally { _lvThreads.EndUpdate(); }
+    }
+
+    private void JumpFromThread()
+    {
+        if (_reader == null || _lvThreads.SelectedItems.Count == 0) return;
+        ulong addr = (ulong)_lvThreads.SelectedItems[0].Tag!;
+        if (addr == 0) return;
+        _txtAddress.Text = "0x" + addr.ToString("X");
         _txtSize.Text = "256";
         ReadHexAtAddress();
         if (_txtHex.Parent is TabPage page && page.Parent is TabControl tc)

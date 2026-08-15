@@ -10,6 +10,10 @@ de escritorio (WinForms, .NET 8) que:
 - Enumera sus regiones de memoria (dirección, tamaño, protección, tipo).
 - Lista los **módulos cargados** (DLL/EXE) con su dirección base — doble clic para
   saltar a su memoria.
+- **Entropía por región** (bajo demanda): resalta zonas de alta entropía (>7.2),
+  posible código empaquetado o cifrado.
+- **Lista de hilos** con su **dirección de inicio**; un inicio fuera de todo módulo
+  se marca en rojo (posible código inyectado).
 - Muestra la memoria en un **visor hexadecimal** (hex + ASCII).
 - **Panel de interpretación**: ve los bytes de una dirección como int8/16/32/64,
   float, double, puntero y cadena.

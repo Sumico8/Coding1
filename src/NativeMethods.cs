@@ -101,6 +101,43 @@ internal static class NativeMethods
         IntPtr userStreamParam,
         IntPtr callbackParam);
 
+    // ---- Enumeracion de hilos (Toolhelp + ntdll) ----
+    public const uint TH32CS_SNAPTHREAD = 0x00000004;
+    public const uint THREAD_QUERY_LIMITED_INFORMATION = 0x0800;
+    public static readonly IntPtr INVALID_HANDLE_VALUE = new(-1);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct THREADENTRY32
+    {
+        public uint dwSize;
+        public uint cntUsage;
+        public uint th32ThreadID;
+        public uint th32OwnerProcessID;
+        public int tpBasePri;
+        public int tpDeltaPri;
+        public uint dwFlags;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern IntPtr CreateToolhelp32Snapshot(uint dwFlags, uint th32ProcessID);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool Thread32First(IntPtr hSnapshot, ref THREADENTRY32 lpte);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool Thread32Next(IntPtr hSnapshot, ref THREADENTRY32 lpte);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern IntPtr OpenThread(uint dwDesiredAccess, [MarshalAs(UnmanagedType.Bool)] bool bInheritHandle, uint dwThreadId);
+
+    // ThreadQuerySetWin32StartAddress = 9
+    [DllImport("ntdll.dll")]
+    public static extern int NtQueryInformationThread(
+        IntPtr threadHandle, int threadInformationClass,
+        ref ulong threadInformation, int threadInformationLength, out int returnLength);
+
     /// <summary>Devuelve true si la proteccion de la pagina permite lectura.</summary>
     public static bool IsReadable(uint protect)
     {
