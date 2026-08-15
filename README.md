@@ -70,6 +70,13 @@ de escritorio (WinForms, .NET 8) que:
   muestra una banda **Identidad** que te dice de qué es la dirección que estás viendo:
   su `módulo+offset`, la región donde vive (estática/dinámica, protección) y la
   etiqueta que coincide.
+- **Disector de estructuras**: define los campos de un objeto (offset + tipo + nombre)
+  y, dada una dirección base, ve **todos sus valores en vivo** a la vez — para saber de
+  qué es cada offset **dentro** del objeto (jugador, árbol, planta…). Guarda y reutiliza
+  las definiciones (`%APPDATA%\MemReader\structs.json`).
+- **Detalles de usabilidad**: clic en la cabecera de cualquier lista para **ordenar**
+  (hex/numérico/texto), clic derecho para **copiar dirección o fila**, DPI *PerMonitorV2*
+  (nítido en pantallas 4K/escala 150 %).
 
 Todo se apoya en APIs **documentadas y soportadas** de Windows
 (`OpenProcess`, `VirtualQueryEx`, `ReadProcessMemory`). Por defecto **solo lee** la
@@ -209,6 +216,9 @@ src/ThemedControls.cs         ListView/TabControl/ComboBox con dibujado propio
 src/ListViewFilter.cs         Filtro rápido para las listas de resultados
 src/Annotation.cs             Etiquetas: modelo, almacén JSON y motor de identificación
 src/AnnotationDialog.cs       Diálogo para crear/editar etiquetas
+src/MemoryClassifier.cs       Clasifica cada dirección (módulo/pila/montón/mapeado)
+src/FrozenValues.cs           Congela valores (reescritura periódica en modo edición)
+src/StructDefinition.cs       Disector de estructuras: campos, formato y persistencia
 src/MainForm.cs               Interfaz gráfica
 src/Program.cs                Punto de entrada
 ```

@@ -66,6 +66,14 @@ public static class SecurityAnalyzer
             if ((v & GUARD_CF) == 0)
                 findings.Add(new SecurityFinding(1, "Baja", "Sin CFG",
                     $"{m.Name} no tiene GUARD_CF (Control Flow Guard) en 0x{m.BaseAddress:X}.", m.BaseAddress));
+            // ASLR presente pero sin alta entropia -> aleatorizacion de 64 bits mas debil.
+            if ((v & DYNAMIC_BASE) != 0 && (v & HIGH_ENTROPY_VA) == 0 && !reader.IsTargetWow64())
+                findings.Add(new SecurityFinding(1, "Baja", "ASLR sin alta entropia",
+                    $"{m.Name} tiene ASLR pero sin HIGH_ENTROPY_VA (aleatorizacion de 64 bits mas debil) en 0x{m.BaseAddress:X}.", m.BaseAddress));
+            // FORCE_INTEGRITY: solo carga codigo firmado (mitigacion fuerte, poco comun).
+            if ((v & FORCE_INTEGRITY) != 0)
+                findings.Add(new SecurityFinding(0, "Info", "Integridad de codigo",
+                    $"{m.Name} exige FORCE_INTEGRITY (solo carga codigo firmado) en 0x{m.BaseAddress:X}.", m.BaseAddress));
         }
 
         findings.Sort((a, b) => b.Rank.CompareTo(a.Rank));

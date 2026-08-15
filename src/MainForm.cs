@@ -70,6 +70,13 @@ public sealed class MainForm : Form
     private bool _editMode;
     private readonly FrozenValues _frozen = new();
     private readonly AnnotationStore _store = new();
+    private readonly StructStore _structStore = new();
+    private ThemedListView _lvStruct = null!;
+    private TextBox _txtStructBase = null!;
+    private TextBox _txtFieldOff = null!;
+    private TextBox _txtFieldName = null!;
+    private ThemedComboBox _cmbFieldType = null!;
+    private ThemedComboBox _cmbStructDef = null!;
     private Identifier? _identifier;
     private ThemedListView _lvLabels = null!;
     private TextBox _lblIdentity = null!;
@@ -151,6 +158,7 @@ public sealed class MainForm : Form
         var pointersPage = BuildPointersTab();
         var scanPage = BuildScanTab();
         var labelsPage = BuildLabelsTab();
+        var structPage = BuildStructSection();
         var stringsPage = BuildStringsTab();
         var securityPage = BuildSecurityTab();
         var threadsPage = BuildThreadsTab();
@@ -165,6 +173,7 @@ public sealed class MainForm : Form
             ("📈   Escaneo", scanPage),
             ("📌   Punteros", pointersPage),
             ("🏷   Etiquetas", labelsPage),
+            ("🧬   Estructuras", structPage),
             ("🔡   Strings", stringsPage),
             ("🧩   Modulos", modulesPage),
             ("🔐   Seguridad", securityPage),
@@ -192,7 +201,14 @@ public sealed class MainForm : Form
         _ctxLabel = new ContextMenuStrip();
         var miLabel = new ToolStripMenuItem("Etiquetar esta direccion...");
         miLabel.Click += (_, _) => { if (_ctxLabel.SourceControl is ListView lv) EtiquetarFromContext(lv); };
+        var miCopyAddr = new ToolStripMenuItem("Copiar direccion");
+        miCopyAddr.Click += (_, _) => CopyFromContext(false);
+        var miCopyRow = new ToolStripMenuItem("Copiar fila");
+        miCopyRow.Click += (_, _) => CopyFromContext(true);
         _ctxLabel.Items.Add(miLabel);
+        _ctxLabel.Items.Add(new ToolStripSeparator());
+        _ctxLabel.Items.Add(miCopyAddr);
+        _ctxLabel.Items.Add(miCopyRow);
         foreach (var lv in new ListView[] { _lvResults, _lvScan, _lvPointers, _lvStrings })
             lv.ContextMenuStrip = _ctxLabel;
 
@@ -230,6 +246,8 @@ public sealed class MainForm : Form
 
         Load += (_, _) =>
         {
+            _structStore.Load();
+            RefreshStructDefsCombo();
             ShowElevationState();
             LoadProcesses();
         };
@@ -605,6 +623,25 @@ public sealed class MainForm : Form
         }
     }
 
+    private void CopyFromContext(bool wholeRow)
+    {
+        if (_ctxLabel.SourceControl is not ListView lv || lv.SelectedItems.Count == 0) return;
+        var it = lv.SelectedItems[0];
+        string text;
+        if (wholeRow)
+        {
+            var parts = new List<string>();
+            foreach (ListViewItem.ListViewSubItem s in it.SubItems) parts.Add(s.Text);
+            text = string.Join("\t", parts);
+        }
+        else
+        {
+            text = it.Tag is ulong addr ? "0x" + addr.ToString("X") : it.Text;
+        }
+        try { Clipboard.SetText(text); _status.Text = "Copiado al portapapeles."; }
+        catch (Exception ex) { _status.Text = "No se pudo copiar: " + ex.Message; }
+    }
+
     private void DeleteLabel()
     {
         if (_lvLabels.SelectedItems.Count == 0) return;
@@ -688,6 +725,155 @@ public sealed class MainForm : Form
             _lblIdentity.ForeColor = t.TextPrimary;
         }
         _lblIdentity.Text = sb.ToString();
+    }
+
+    // ---------------- Estructuras (disector) ----------------
+
+    private TabPage BuildStructSection()
+    {
+        var page = new TabPage("Estructuras");
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 76, WrapContents = true, Padding = new Padding(6, 4, 6, 4) };
+
+        var lblBase = new Label { Text = "Base (hex):", AutoSize = true, Margin = new Padding(0, 8, 3, 0), Tag = "hint" };
+        _txtStructBase = new TextBox { Width = 150, Font = Mono, Margin = new Padding(0, 5, 8, 0) };
+        var btnRead = new Button { Text = "Leer valores", Width = 110, Margin = new Padding(0, 4, 8, 0) };
+        btnRead.Click += (_, _) => ReadStruct();
+        var lblDef = new Label { Text = "Def:", AutoSize = true, Margin = new Padding(6, 8, 3, 0), Tag = "hint" };
+        _cmbStructDef = new ThemedComboBox { Width = 150, DropDownStyle = ComboBoxStyle.DropDown, Margin = new Padding(0, 5, 6, 0) };
+        _cmbStructDef.SelectedIndexChanged += (_, _) => LoadStructDef();
+        var btnSaveDef = new Button { Text = "Guardar def", Width = 100, Margin = new Padding(0, 4, 4, 0) };
+        btnSaveDef.Click += (_, _) => SaveStructDef();
+
+        var lblOff = new Label { Text = "Off (hex):", AutoSize = true, Margin = new Padding(0, 8, 3, 0), Tag = "hint" };
+        _txtFieldOff = new TextBox { Width = 70, Font = Mono, Margin = new Padding(0, 5, 6, 0) };
+        var lblName = new Label { Text = "Nombre:", AutoSize = true, Margin = new Padding(0, 8, 3, 0), Tag = "hint" };
+        _txtFieldName = new TextBox { Width = 130, Margin = new Padding(0, 5, 6, 0) };
+        var lblType = new Label { Text = "Tipo:", AutoSize = true, Margin = new Padding(0, 8, 3, 0), Tag = "hint" };
+        _cmbFieldType = new ThemedComboBox { Width = 90, DropDownStyle = ComboBoxStyle.DropDownList, Margin = new Padding(0, 5, 6, 0) };
+        _cmbFieldType.Items.AddRange(Enum.GetNames(typeof(FieldType)).Cast<object>().ToArray());
+        _cmbFieldType.SelectedIndex = (int)FieldType.Int32;
+        var btnAddField = new Button { Text = "Anadir campo", Width = 110, Margin = new Padding(0, 4, 4, 0) };
+        btnAddField.Click += (_, _) => AddStructField();
+        var btnDelField = new Button { Text = "Quitar", Width = 80, Margin = new Padding(0, 4, 4, 0) };
+        btnDelField.Click += (_, _) => { foreach (ListViewItem it in _lvStruct.SelectedItems) it.Remove(); };
+
+        bar.Controls.AddRange(new Control[]
+        {
+            lblBase, _txtStructBase, btnRead, lblDef, _cmbStructDef, btnSaveDef,
+            lblOff, _txtFieldOff, lblName, _txtFieldName, lblType, _cmbFieldType, btnAddField, btnDelField
+        });
+
+        _lvStruct = new ThemedListView
+        {
+            Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true,
+            GridLines = true, MultiSelect = true,
+        };
+        _lvStruct.Columns.Add("Offset", 80);
+        _lvStruct.Columns.Add("Nombre", 160);
+        _lvStruct.Columns.Add("Tipo", 80);
+        _lvStruct.Columns.Add("Valor", 180);
+        _lvStruct.Columns.Add("Direccion", 160);
+        _lvStruct.Columns.Add("Que es", 220);
+        _lvStruct.DoubleClick += (_, _) => JumpFromStruct();
+
+        var hint = new Label
+        {
+            Dock = DockStyle.Bottom, Height = 22,
+            Text = "Define campos (offset/tipo/nombre), pon la direccion base y 'Leer valores'. Doble clic salta a un campo.",
+            ForeColor = Color.Gray, Tag = "hint", Padding = new Padding(4, 2, 0, 0),
+        };
+
+        page.Controls.Add(_lvStruct);
+        page.Controls.Add(hint);
+        page.Controls.Add(bar);
+        return page;
+    }
+
+    private void AddStructField()
+    {
+        if (!TryParseAddress(_txtFieldOff.Text, out ulong off))
+        {
+            _status.Text = "Offset invalido (hex, p.ej. 0x40).";
+            return;
+        }
+        var type = (FieldType)Math.Max(0, _cmbFieldType.SelectedIndex);
+        var f = new StructField { Offset = (long)off, Type = type, Name = _txtFieldName.Text.Trim() };
+        AddStructRow(f);
+        _txtFieldOff.Clear();
+        _txtFieldName.Clear();
+    }
+
+    private void AddStructRow(StructField f)
+    {
+        var it = new ListViewItem("0x" + f.Offset.ToString("X")) { Tag = f };
+        it.SubItems.Add(f.Name);
+        it.SubItems.Add(f.Type.ToString());
+        it.SubItems.Add("");
+        it.SubItems.Add("");
+        it.SubItems.Add("");
+        _lvStruct.Items.Add(it);
+    }
+
+    private void ReadStruct()
+    {
+        if (_reader == null) { _status.Text = "Abre un proceso primero."; return; }
+        if (!TryParseAddress(_txtStructBase.Text, out ulong baseAddr)) { _status.Text = "Base invalida (hex)."; return; }
+
+        foreach (ListViewItem it in _lvStruct.Items)
+        {
+            if (it.Tag is not StructField f) continue;
+            ulong addr = baseAddr + (ulong)f.Offset;
+            it.SubItems[4].Text = "0x" + addr.ToString("X");
+            byte[] d;
+            try { d = _reader.ReadBytes(addr, StructField.SizeOf(f.Type)); }
+            catch { it.SubItems[3].Text = "(ilegible)"; continue; }
+            it.SubItems[3].Text = StructField.Format(f.Type, d);
+            it.SubItems[5].Text = _identifier?.WhatIs(addr).Text ?? "";
+        }
+        _status.Text = $"Estructura leida desde 0x{baseAddr:X}.";
+    }
+
+    private void JumpFromStruct()
+    {
+        if (_reader == null || _lvStruct.SelectedItems.Count == 0) return;
+        var it = _lvStruct.SelectedItems[0];
+        if (it.SubItems.Count < 5 || !TryParseAddress(it.SubItems[4].Text, out ulong addr)) return;
+        _txtAddress.Text = "0x" + addr.ToString("X");
+        _txtSize.Text = "128";
+        ReadHexAtAddress();
+        ShowSection(_hexPage);
+    }
+
+    private void SaveStructDef()
+    {
+        string name = _cmbStructDef.Text.Trim();
+        if (string.IsNullOrEmpty(name)) { _status.Text = "Escribe un nombre para la definicion."; return; }
+        var def = new StructDefinition { Name = name };
+        foreach (ListViewItem it in _lvStruct.Items)
+            if (it.Tag is StructField f) def.Fields.Add(f);
+        _structStore.Upsert(def);
+        RefreshStructDefsCombo();
+        _cmbStructDef.Text = name;
+        _status.Text = $"Definicion «{name}» guardada ({def.Fields.Count} campos).";
+    }
+
+    private void LoadStructDef()
+    {
+        string name = _cmbStructDef.SelectedItem?.ToString() ?? "";
+        var def = _structStore.Items.FirstOrDefault(d => d.Name == name);
+        if (def == null) return;
+        _lvStruct.Items.Clear();
+        foreach (var f in def.Fields) AddStructRow(f);
+        _status.Text = $"Definicion «{name}» cargada.";
+    }
+
+    private void RefreshStructDefsCombo()
+    {
+        if (_cmbStructDef == null) return;
+        string cur = _cmbStructDef.Text;
+        _cmbStructDef.Items.Clear();
+        foreach (var d in _structStore.Items) _cmbStructDef.Items.Add(d.Name);
+        _cmbStructDef.Text = cur;
     }
 
     // Referencias temporales usadas al construir las pestanas.

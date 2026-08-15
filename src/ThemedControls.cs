@@ -1,18 +1,70 @@
+using System.Globalization;
+
 namespace MemReader;
+
+/// <summary>Comparador de columnas: ordena hex (0x...), numeros o texto.</summary>
+public sealed class ListViewColumnSorter : System.Collections.IComparer
+{
+    public int Column { get; set; }
+    public SortOrder Order { get; set; } = SortOrder.Ascending;
+
+    public int Compare(object? x, object? y)
+    {
+        var a = (ListViewItem)x!;
+        var b = (ListViewItem)y!;
+        string sa = Column < a.SubItems.Count ? a.SubItems[Column].Text : "";
+        string sb = Column < b.SubItems.Count ? b.SubItems[Column].Text : "";
+        int cmp = CompareSmart(sa, sb);
+        return Order == SortOrder.Descending ? -cmp : cmp;
+    }
+
+    private static int CompareSmart(string a, string b)
+    {
+        if (TryHex(a, out ulong ha) && TryHex(b, out ulong hb)) return ha.CompareTo(hb);
+        if (double.TryParse(a, NumberStyles.Any, CultureInfo.InvariantCulture, out double da) &&
+            double.TryParse(b, NumberStyles.Any, CultureInfo.InvariantCulture, out double db))
+            return da.CompareTo(db);
+        return string.Compare(a, b, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryHex(string s, out ulong v)
+    {
+        v = 0;
+        int i = s.IndexOf("0x", StringComparison.OrdinalIgnoreCase);
+        if (i < 0) return false;
+        return ulong.TryParse(s.AsSpan(i + 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out v);
+    }
+}
 
 /// <summary>
 /// ListView con dibujado propio para respetar el tema (cabeceras y filas) tanto en
 /// claro como en oscuro. Lee ThemeManager.Current al pintar, asi que cambiar de
 /// tema solo requiere Invalidate(). Preserva el ForeColor semantico de cada fila
-/// (severidad, entropia, etc.) y el color de seleccion del tema.
+/// (severidad, entropia, etc.) y el color de seleccion del tema. Ademas ordena al
+/// hacer clic en la cabecera.
 /// </summary>
 public sealed class ThemedListView : ListView
 {
+    private readonly ListViewColumnSorter _sorter = new();
+
     public ThemedListView()
     {
         OwnerDraw = true;
         DoubleBuffered = true;
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
+
+        // Ordenar al pulsar una cabecera. Se asigna el comparador solo durante el
+        // Sort para no ralentizar los rellenos masivos (Items.Add auto-ordena si
+        // ListViewItemSorter esta activo).
+        ColumnClick += (_, e) =>
+        {
+            if (_sorter.Column == e.Column)
+                _sorter.Order = _sorter.Order == SortOrder.Descending ? SortOrder.Ascending : SortOrder.Descending;
+            else { _sorter.Column = e.Column; _sorter.Order = SortOrder.Ascending; }
+            ListViewItemSorter = _sorter;
+            Sort();
+            ListViewItemSorter = null;
+        };
     }
 
     protected override void OnDrawColumnHeader(DrawListViewColumnHeaderEventArgs e)
