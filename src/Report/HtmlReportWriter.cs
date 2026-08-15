@@ -43,6 +43,7 @@ public static class HtmlReportWriter
         Card(sb, "Hilos sospechosos", r.SuspiciousThreads.Count.ToString(), r.SuspiciousThreads.Count > 0 ? "warn" : "ok");
         Card(sb, "Modulos", r.Modules.Count.ToString("N0"));
         if (r.Iocs.Count > 0) Card(sb, "IOCs", r.Iocs.Count.ToString("N0"), "warn");
+        if (r.RuleHits.Count > 0) Card(sb, "Reglas", r.RuleHits.Count.ToString(), "bad");
         sb.Append("</section>");
 
         // Hallazgos de seguridad.
@@ -99,6 +100,21 @@ public static class HtmlReportWriter
             foreach (var i in r.Iocs)
                 sb.Append("<tr><td>").Append(E(i.Type)).Append("</td><td class=\"mono\">").Append(E(i.Value))
                   .Append("</td><td class=\"mono\">").Append(E(i.Address)).Append("</td></tr>");
+            sb.Append("</tbody></table>");
+        }
+
+        // Reglas heuristicas.
+        if (r.RuleHits.Count > 0)
+        {
+            sb.Append("<h2>Reglas heuristicas</h2>");
+            sb.Append("<table><thead><tr><th>Severidad</th><th>Regla</th><th>Descripcion</th><th>Evidencia</th><th>Direccion</th></tr></thead><tbody>");
+            foreach (var h in r.RuleHits)
+            {
+                string cls = h.Severity == "Alta" ? "sev-high" : h.Severity == "Media" ? "sev-med" : "sev-low";
+                sb.Append("<tr><td class=\"").Append(cls).Append("\">").Append(E(h.Severity)).Append("</td><td>")
+                  .Append(E(h.Rule)).Append("</td><td>").Append(E(h.Description)).Append("</td><td class=\"small\">")
+                  .Append(E(h.Evidence)).Append("</td><td class=\"mono\">").Append(E(h.Address)).Append("</td></tr>");
+            }
             sb.Append("</tbody></table>");
         }
 

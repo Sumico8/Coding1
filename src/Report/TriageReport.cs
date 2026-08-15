@@ -34,8 +34,11 @@ public sealed class TriageReport
     public List<ReportThread> SuspiciousThreads { get; set; } = new();
     public List<ReportModule> Modules { get; set; } = new();
     public List<ReportIoc> Iocs { get; set; } = new();
+    public List<ReportRuleHit> RuleHits { get; set; } = new();
     public List<string> Notes { get; set; } = new();
 }
+
+public sealed record ReportRuleHit(string Severity, string Rule, string Description, string Evidence, string Address);
 
 public sealed record ReportFinding(string Severity, string Category, string Detail, string Address);
 public sealed record ReportRegion(string Address, string Size, string Protect, string Type, double Entropy);

@@ -17,7 +17,7 @@ public static class TriageEngine
     public static TriageReport Analyze(
         ProcessMemoryReader reader, string processName,
         IProgress<string>? progress, CancellationToken ct,
-        bool hashModules = false, bool extractIocs = false)
+        bool hashModules = false, bool extractIocs = false, bool runRules = false)
     {
         var r = new TriageReport
         {
@@ -111,20 +111,30 @@ public static class TriageEngine
             r.Iocs = iocs.Select(i => new ReportIoc(i.Type, i.Value, i.AddressText)).ToList();
         }
 
+        // Reglas heuristicas (opcional).
+        if (runRules)
+        {
+            progress?.Report("Aplicando reglas heuristicas...");
+            var ruleHits = RuleEngine.Scan(reader, progress, ct);
+            r.RuleHits = ruleHits
+                .Select(h => new ReportRuleHit(h.Severity, h.Rule, h.Description, h.Evidence, h.FirstAddressText))
+                .ToList();
+        }
+
         return r;
     }
 
     /// <summary>Abre el proceso por PID, lo analiza y cierra el handle.</summary>
     public static TriageReport Analyze(
         int pid, IProgress<string>? progress, CancellationToken ct,
-        bool hashModules = false, bool extractIocs = false)
+        bool hashModules = false, bool extractIocs = false, bool runRules = false)
     {
         string name = "(desconocido)";
         try { using var p = Process.GetProcessById(pid); name = p.ProcessName; }
         catch { /* el nombre no es imprescindible */ }
 
         using var reader = new ProcessMemoryReader(pid);
-        return Analyze(reader, name, progress, ct, hashModules, extractIocs);
+        return Analyze(reader, name, progress, ct, hashModules, extractIocs, runRules);
     }
 
     private static string AppVersion()

@@ -222,7 +222,8 @@ internal static class CliRunner
         var progress = Progress(opts);
         bool hash = opts.ContainsKey("hash");
         bool ioc = opts.ContainsKey("ioc");
-        var report = TriageEngine.Analyze(pid, progress, CancellationToken.None, hash, ioc);
+        bool rules = opts.ContainsKey("rules");
+        var report = TriageEngine.Analyze(pid, progress, CancellationToken.None, hash, ioc, rules);
         EndProgress();
 
         string htmlPath = Get(opts, "out") ?? $"informe_pid{pid}.html";
@@ -534,9 +535,9 @@ VERBOS:
             Vuelca todas las regiones legibles a una carpeta (con indice).
   minidump  --pid <N> [--out <archivo.dmp>] [--normal]
             Genera un minidump (memoria completa por defecto).
-  report    --pid <N> [--out <archivo.html>] [--hash] [--ioc]
+  report    --pid <N> [--out <archivo.html>] [--hash] [--ioc] [--rules]
             Informe de triage completo en HTML + JSON (mismo nombre base).
-            --hash anade SHA-256 de modulos; --ioc anade IOCs (mas lento).
+            --hash anade SHA-256; --ioc anade IOCs; --rules anade reglas.
   hashes    --pid <N> [--out <archivo.csv>]
             SHA-256 de cada modulo en disco + URL de VirusTotal.
   ioc       --pid <N> [--min <n>] [--out <archivo.csv>]

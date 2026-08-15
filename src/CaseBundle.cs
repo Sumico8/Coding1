@@ -20,7 +20,7 @@ public static class CaseBundle
             outPath += ".zip";
 
         progress?.Report("Generando informe...");
-        var report = TriageEngine.Analyze(pid, progress, ct, hashModules: true, extractIocs: true);
+        var report = TriageEngine.Analyze(pid, progress, ct, hashModules: true, extractIocs: true, runRules: true);
         string html = HtmlReportWriter.Write(report);
         string json = JsonReportWriter.Write(report);
 
