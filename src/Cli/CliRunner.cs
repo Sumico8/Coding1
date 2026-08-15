@@ -345,7 +345,7 @@ VERBOS:
             Extrae IOCs (IPs, URLs, dominios, correos, rutas, registro, GUIDs).
   search    --pid <N> (--text <s> | --aob <patron> | --bytes <hex> |
             --int32 <n> | --int64 <n>) [--out <archivo.csv>]
-            Busca en memoria. AOB admite comodines, p. ej. --aob "48 8B ?? E8".
+            Busca en memoria. AOB admite comodines, p. ej. --aob 48 8B ?? E8
   version   Muestra la version.
   help      Muestra esta ayuda.
 
