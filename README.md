@@ -57,7 +57,27 @@ firmada y reversible, sin construir un rootkit.
 
 ---
 
-## Requisitos
+## Descarga rápida (sin compilar nada)
+
+Cada vez que se sube código a la rama, un **GitHub Action** compila
+`MemReader.exe` en un runner de Windows y lo publica automáticamente. Tienes dos
+formas de descargarlo ya hecho:
+
+- **Release "latest" (enlace directo):** el `.exe` siempre está disponible en la
+  página de *Releases* del repo, en la release llamada **Latest build**. Enlace
+  directo:
+  `https://github.com/Sumico8/Coding1/releases/download/latest/MemReader.exe`
+- **Artefacto de la ejecución:** entra en la pestaña **Actions** del repo, abre la
+  última ejecución de *Build MemReader* y descarga el artefacto
+  `MemReader-windows-x64` (es un `.zip` con el `.exe` dentro).
+
+> El `.exe` no está firmado, así que la primera vez Windows SmartScreen mostrará
+> "Windows protegió tu PC": pulsa **Más información → Ejecutar de todas formas**.
+> Recuerda ejecutarlo **como Administrador**.
+
+Si prefieres compilarlo tú mismo, sigue las secciones de abajo.
+
+## Requisitos (para compilar en local)
 
 - Windows 10/11 de 64 bits.
 - [.NET SDK 8.0](https://dotnet.microsoft.com/download/dotnet/8.0) para compilar.
@@ -110,6 +130,7 @@ También puedes usar el script incluido:
 ## Estructura
 
 ```
+.github/workflows/build.yml   Compila el .exe en la nube y lo publica
 MemReader.csproj              Proyecto .NET (WinForms, x64)
 app.manifest                  Solicita elevación (Administrador) + DPI
 src/NativeMethods.cs          P/Invoke a kernel32 (APIs documentadas)

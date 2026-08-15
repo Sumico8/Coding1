@@ -1,0 +1,71 @@
+name: Build MemReader
+
+on:
+  push:
+    branches:
+      - "claude/windows-pentesting-memory-reader-d07jdf"
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Publish (single-file, self-contained, x64)
+        run: >
+          dotnet publish MemReader.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -o publish
+
+      - name: List publish output
+        run: dir publish
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MemReader-windows-x64
+          path: publish/MemReader.exe
+          if-no-files-found: error
+
+      - name: Update rolling "latest" release (branch push / manual run)
+        if: github.ref == 'refs/heads/claude/windows-pentesting-memory-reader-d07jdf'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest build
+          make_latest: false
+          fail_on_unmatched_files: true
+          body: >
+            Rolling development build from the latest push.
+            This executable is unsigned: on first launch Windows SmartScreen may show
+            "Windows protected your PC" - click "More info" then "Run anyway".
+            Run MemReader as Administrator.
+          files: publish/MemReader.exe
+
+      - name: Create release (on tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          fail_on_unmatched_files: true
+          body: >
+            This executable is unsigned: on first launch Windows SmartScreen may show
+            "Windows protected your PC" - click "More info" then "Run anyway".
+            Run MemReader as Administrator.
+          files: publish/MemReader.exe
