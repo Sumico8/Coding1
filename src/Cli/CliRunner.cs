@@ -82,6 +82,8 @@ internal static class CliRunner
                     return CmdInfo(opts, elevated);
                 case "bundle":
                     return CmdBundle(opts, elevated);
+                case "rules":
+                    return CmdRules(opts, elevated);
                 default:
                     Console.Error.WriteLine(
                         $"Verbo desconocido: '{verb}'. Ejecuta 'MemReader.exe help' para ver el uso.");
@@ -489,6 +491,27 @@ internal static class CliRunner
         return 0;
     }
 
+    private static int CmdRules(Dictionary<string, string> opts, bool elevated)
+    {
+        int pid = RequirePid(opts);
+        WarnIfNotElevated(elevated);
+        using var reader = new ProcessMemoryReader(pid);
+        var progress = Progress(opts);
+        var hits = RuleEngine.Scan(reader, progress, CancellationToken.None);
+        EndProgress();
+
+        var sb = new StringBuilder();
+        sb.AppendLine("severity,rule,matches,evidence,address");
+        foreach (var h in hits)
+            sb.AppendLine($"{h.Severity},{Csv(h.Rule)},{h.Matches},{Csv(h.Evidence)},{h.FirstAddressText}");
+        WriteOutput(sb.ToString(), Get(opts, "out"));
+
+        Console.Error.WriteLine($"{hits.Count} reglas coincidieron.");
+        foreach (var h in hits)
+            Console.Error.WriteLine($"  [{h.Severity}] {h.Rule}: {h.Description}");
+        return 0;
+    }
+
     private static int PrintHelp()
     {
         Console.WriteLine(
@@ -537,6 +560,8 @@ VERBOS:
   bundle    --pid <N> [--out <caso.zip>] [--full]
             Empaqueta informe + minidump + indice de regiones en un .zip.
             --full incluye un minidump de memoria completa (grande).
+  rules     --pid <N> [--out <archivo.csv>]
+            Aplica reglas heuristicas de triage (inyeccion, shellcode, packers...).
   version   Muestra la version.
   help      Muestra esta ayuda.
 

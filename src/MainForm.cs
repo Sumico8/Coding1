@@ -74,6 +74,8 @@ public sealed class MainForm : Form
     private ulong _snapABase;
     private ListView _lvMachine = null!;
     private CancellationTokenSource? _machineCts;
+    private ListView _lvRules = null!;
+    private CancellationTokenSource? _rulesCts;
     private readonly System.Windows.Forms.Timer _refreshTimer;
 
     private ProcessMemoryReader? _reader;
@@ -188,6 +190,7 @@ public sealed class MainForm : Form
         tabs.TabPages.Add(BuildHandlesTab());
         tabs.TabPages.Add(BuildDiffTab());
         tabs.TabPages.Add(BuildMachineTab());
+        tabs.TabPages.Add(BuildRulesTab());
         tabs.TabPages.Add(BuildInformeTab());
         split2.Panel2.Controls.Add(tabs);
 
@@ -236,6 +239,7 @@ public sealed class MainForm : Form
             _hookCts?.Cancel();
             _handlesCts?.Cancel();
             _machineCts?.Cancel();
+            _rulesCts?.Cancel();
             _reader?.Dispose();
         };
     }
@@ -1036,6 +1040,48 @@ public sealed class MainForm : Form
         };
 
         page.Controls.Add(_lvMachine);
+        page.Controls.Add(hint);
+        page.Controls.Add(bar);
+        return page;
+    }
+
+    private TabPage BuildRulesTab()
+    {
+        var page = new TabPage("Reglas");
+        var bar = new Panel { Dock = DockStyle.Top, Height = 34 };
+        var btnGo = new Button { Text = "Aplicar reglas", Left = 4, Top = 4, Width = 130 };
+        btnGo.Click += (_, _) => _ = DoRulesAsync();
+        var btnStop = new Button { Text = "Detener", Left = 140, Top = 4, Width = 80 };
+        btnStop.Click += (_, _) => _rulesCts?.Cancel();
+        var btnCsv = new Button { Text = "Exportar CSV...", Left = 226, Top = 4, Width = 120 };
+        btnCsv.Click += (_, _) => ExportRulesCsv();
+        bar.Controls.AddRange(new Control[] { btnGo, btnStop, btnCsv });
+
+        _lvRules = new ListView
+        {
+            Dock = DockStyle.Fill,
+            View = View.Details,
+            FullRowSelect = true,
+            GridLines = true,
+            MultiSelect = false
+        };
+        _lvRules.Columns.Add("Severidad", 80);
+        _lvRules.Columns.Add("Regla", 200);
+        _lvRules.Columns.Add("Coincid.", 70);
+        _lvRules.Columns.Add("Evidencia", 380);
+        _lvRules.Columns.Add("Direccion", 150);
+        _lvRules.DoubleClick += (_, _) => JumpFromRule();
+
+        var hint = new Label
+        {
+            Dock = DockStyle.Bottom,
+            Height = 22,
+            Text = "Reglas heuristicas de triage (inyeccion, shellcode, packers, credenciales, AMSI/ETW, recon...). Doble clic para ver.",
+            ForeColor = Color.Gray,
+            Padding = new Padding(4, 2, 0, 0)
+        };
+
+        page.Controls.Add(_lvRules);
         page.Controls.Add(hint);
         page.Controls.Add(bar);
         return page;
@@ -2616,6 +2662,78 @@ public sealed class MainForm : Form
             sb.AppendLine("score,pid,proceso,arch,rwx,exec_no_img,hilos_susp");
             foreach (ListViewItem it in _lvMachine.Items)
                 sb.AppendLine($"{it.Text},{it.SubItems[1].Text},{it.SubItems[2].Text},{it.SubItems[3].Text},{it.SubItems[4].Text},{it.SubItems[5].Text},{it.SubItems[6].Text}");
+            File.WriteAllText(sfd.FileName, sb.ToString());
+            _status.Text = "Guardado en " + sfd.FileName;
+        }
+        catch (Exception ex) { _status.Text = "Error al guardar: " + ex.Message; }
+    }
+
+    // ---------------- Reglas heuristicas ----------------
+
+    private async Task DoRulesAsync()
+    {
+        if (_reader == null) { _status.Text = "Abre un proceso primero."; return; }
+        _lvRules.Items.Clear();
+        _rulesCts = new CancellationTokenSource();
+        var ct = _rulesCts.Token;
+        var reader = _reader;
+        var progress = new Progress<string>(m => _status.Text = m);
+        try
+        {
+            var hits = await Task.Run(() => RuleEngine.Scan(reader, progress, ct), ct);
+            _lvRules.BeginUpdate();
+            foreach (var h in hits)
+            {
+                var it = new ListViewItem(h.Severity) { Tag = h.FirstAddress };
+                it.SubItems.Add(h.Rule);
+                it.SubItems.Add(h.Matches.ToString());
+                it.SubItems.Add(h.Evidence);
+                it.SubItems.Add(h.FirstAddressText);
+                if (h.Severity == "Alta") it.ForeColor = Color.Firebrick;
+                else if (h.Severity == "Media") it.ForeColor = Color.DarkGoldenrod;
+                _lvRules.Items.Add(it);
+            }
+            _lvRules.EndUpdate();
+            _status.Text = hits.Count == 0
+                ? "Ninguna regla heuristica coincidio."
+                : $"{hits.Count} reglas coincidieron.";
+        }
+        catch (OperationCanceledException) { _status.Text = "Reglas canceladas."; }
+        catch (Exception ex) { _status.Text = "Error: " + ex.Message; }
+        finally { _rulesCts?.Dispose(); _rulesCts = null; }
+    }
+
+    private void JumpFromRule()
+    {
+        if (_reader == null || _lvRules.SelectedItems.Count == 0) return;
+        ulong addr = (ulong)_lvRules.SelectedItems[0].Tag!;
+        if (addr == 0) return;
+        _txtAddress.Text = "0x" + addr.ToString("X");
+        _txtSize.Text = "256";
+        ReadHexAtAddress();
+        if (_txtHex.Parent is TabPage page && page.Parent is TabControl tc)
+            tc.SelectedTab = page;
+    }
+
+    private void ExportRulesCsv()
+    {
+        if (_lvRules.Items.Count == 0) { _status.Text = "No hay coincidencias que exportar."; return; }
+        using var sfd = new SaveFileDialog
+        {
+            Title = "Guardar coincidencias de reglas",
+            FileName = "reglas.csv",
+            Filter = "CSV (*.csv)|*.csv|Todos los archivos (*.*)|*.*"
+        };
+        if (sfd.ShowDialog(this) != DialogResult.OK) return;
+        try
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("severidad,regla,coincidencias,evidencia,direccion");
+            foreach (ListViewItem it in _lvRules.Items)
+            {
+                string ev = it.SubItems[3].Text.Replace("\"", "\"\"");
+                sb.AppendLine($"{it.Text},{it.SubItems[1].Text},{it.SubItems[2].Text},\"{ev}\",{it.SubItems[4].Text}");
+            }
             File.WriteAllText(sfd.FileName, sb.ToString());
             _status.Text = "Guardado en " + sfd.FileName;
         }
