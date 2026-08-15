@@ -76,6 +76,12 @@ public sealed class MainForm : Form
     private CancellationTokenSource? _machineCts;
     private ListView _lvRules = null!;
     private CancellationTokenSource? _rulesCts;
+    private TextBox _editAddr = null!;
+    private ComboBox _cmbEditType = null!;
+    private TextBox _editValue = null!;
+    private ListView _lvFreeze = null!;
+    private System.Windows.Forms.Timer? _freezeTimer;
+    private readonly List<(ulong addr, byte[] bytes, string type, string value)> _frozen = new();
     private readonly System.Windows.Forms.Timer _refreshTimer;
 
     private ProcessMemoryReader? _reader;
@@ -191,6 +197,7 @@ public sealed class MainForm : Form
         tabs.TabPages.Add(BuildDiffTab());
         tabs.TabPages.Add(BuildMachineTab());
         tabs.TabPages.Add(BuildRulesTab());
+        tabs.TabPages.Add(BuildEditTab());
         tabs.TabPages.Add(BuildInformeTab());
         split2.Panel2.Controls.Add(tabs);
 
@@ -240,6 +247,7 @@ public sealed class MainForm : Form
             _handlesCts?.Cancel();
             _machineCts?.Cancel();
             _rulesCts?.Cancel();
+            _freezeTimer?.Stop();
             _reader?.Dispose();
         };
     }
@@ -1087,6 +1095,61 @@ public sealed class MainForm : Form
         return page;
     }
 
+    private TabPage BuildEditTab()
+    {
+        var page = new TabPage("Editar");
+        var bar = new Panel { Dock = DockStyle.Top, Height = 66 };
+
+        var lblA = new Label { Text = "Direccion (hex):", Left = 4, Top = 9, Width = 100 };
+        _editAddr = new TextBox { Left = 106, Top = 6, Width = 160, Font = Mono };
+        var lblT = new Label { Text = "Tipo:", Left = 276, Top = 9, Width = 40 };
+        _cmbEditType = new ComboBox { Left = 316, Top = 6, Width = 100, DropDownStyle = ComboBoxStyle.DropDownList };
+        _cmbEditType.Items.AddRange(new object[] { "Int32", "Int64", "Float", "Double", "Bytes hex", "Texto" });
+        _cmbEditType.SelectedIndex = 0;
+        var lblV = new Label { Text = "Valor:", Left = 424, Top = 9, Width = 45 };
+        _editValue = new TextBox { Left = 470, Top = 6, Width = 220, Font = Mono };
+
+        var btnWrite = new Button { Text = "Escribir", Left = 106, Top = 34, Width = 100 };
+        btnWrite.Click += (_, _) => DoWriteValue();
+        var btnFreeze = new Button { Text = "Congelar", Left = 212, Top = 34, Width = 100 };
+        btnFreeze.Click += (_, _) => DoFreezeValue();
+        var btnFromHex = new Button { Text = "Desde visor hex", Left = 318, Top = 34, Width = 130 };
+        btnFromHex.Click += (_, _) => _editAddr.Text = _txtAddress.Text;
+        var btnUnfreeze = new Button { Text = "Descongelar", Left = 454, Top = 34, Width = 120 };
+        btnUnfreeze.Click += (_, _) => DoUnfreeze();
+        bar.Controls.AddRange(new Control[]
+        {
+            lblA, _editAddr, lblT, _cmbEditType, lblV, _editValue, btnWrite, btnFreeze, btnFromHex, btnUnfreeze
+        });
+
+        _lvFreeze = new ListView
+        {
+            Dock = DockStyle.Fill,
+            View = View.Details,
+            FullRowSelect = true,
+            GridLines = true,
+            MultiSelect = false
+        };
+        _lvFreeze.Columns.Add("Direccion", 180);
+        _lvFreeze.Columns.Add("Tipo", 100);
+        _lvFreeze.Columns.Add("Valor congelado", 260);
+
+        var hint = new Label
+        {
+            Dock = DockStyle.Bottom,
+            Height = 36,
+            Text = "Editor tipo trainer para procesos que TU abras (tu lab / tus juegos). 'Escribir' cambia el valor una vez; "
+                 + "'Congelar' lo reescribe cada 250 ms. No inyecta codigo. Usalo solo sobre procesos propios o autorizados.",
+            ForeColor = Color.Gray,
+            Padding = new Padding(4, 2, 0, 0)
+        };
+
+        page.Controls.Add(_lvFreeze);
+        page.Controls.Add(hint);
+        page.Controls.Add(bar);
+        return page;
+    }
+
     // ---------------- Procesos ----------------
 
     private void LoadProcesses()
@@ -1174,6 +1237,9 @@ public sealed class MainForm : Form
             _lvSecurity.Items.Clear();
             _lvThreads.Items.Clear();
             _scanSession = null;
+            _frozen.Clear();
+            _lvFreeze.Items.Clear();
+            _freezeTimer?.Stop();
         }
         catch (Win32Exception ex)
         {
@@ -1763,6 +1829,7 @@ public sealed class MainForm : Form
         ulong addr = (ulong)_lvScan.SelectedItems[0].Tag!;
         string hex = "0x" + addr.ToString("X");
         _ptrTarget.Text = hex; // lo deja listo para escanear rutas de puntero
+        _editAddr.Text = hex;  // y listo para editarlo en la pestana Editar
         _txtAddress.Text = hex;
         _txtSize.Text = "256";
         ReadHexAtAddress();
@@ -2738,6 +2805,68 @@ public sealed class MainForm : Form
             _status.Text = "Guardado en " + sfd.FileName;
         }
         catch (Exception ex) { _status.Text = "Error al guardar: " + ex.Message; }
+    }
+
+    // ---------------- Editar / congelar (trainer) ----------------
+
+    private bool TryBuildEditBytes(out ulong addr, out byte[] bytes, out string kind)
+    {
+        addr = 0; bytes = Array.Empty<byte>(); kind = _cmbEditType.SelectedItem?.ToString() ?? "Int32";
+        if (_reader == null) { _status.Text = "Abre un proceso primero."; return false; }
+        if (!TryParseAddress(_editAddr.Text, out addr)) { _status.Text = "Direccion invalida (hex)."; return false; }
+        try { bytes = ValueInterpreter.ToBytes(kind, _editValue.Text); }
+        catch (Exception ex) { _status.Text = $"Valor invalido para {kind}: {ex.Message}"; return false; }
+        return true;
+    }
+
+    private void DoWriteValue()
+    {
+        if (!TryBuildEditBytes(out ulong addr, out byte[] bytes, out string kind)) return;
+        try
+        {
+            int n = _reader!.WriteBytes(addr, bytes);
+            _status.Text = $"Escritos {n} bytes en 0x{addr:X} ({kind} = {_editValue.Text}).";
+            ReadHexAtAddress();
+        }
+        catch (Win32Exception ex) { _status.Text = ex.Message; }
+    }
+
+    private void DoFreezeValue()
+    {
+        if (!TryBuildEditBytes(out ulong addr, out byte[] bytes, out string kind)) return;
+        _frozen.Add((addr, bytes, kind, _editValue.Text));
+        var it = new ListViewItem("0x" + addr.ToString("X"));
+        it.SubItems.Add(kind);
+        it.SubItems.Add(_editValue.Text);
+        _lvFreeze.Items.Add(it);
+
+        if (_freezeTimer == null)
+        {
+            _freezeTimer = new System.Windows.Forms.Timer { Interval = 250 };
+            _freezeTimer.Tick += (_, _) => ApplyFrozen();
+        }
+        _freezeTimer.Start();
+        _status.Text = $"Congelado 0x{addr:X} = {_editValue.Text} (se reescribe cada 250 ms).";
+    }
+
+    private void ApplyFrozen()
+    {
+        if (_reader == null || _frozen.Count == 0) { _freezeTimer?.Stop(); return; }
+        foreach (var f in _frozen)
+        {
+            try { _reader.WriteBytes(f.addr, f.bytes); }
+            catch { /* el proceso pudo cerrarse: se ignora este tick */ }
+        }
+    }
+
+    private void DoUnfreeze()
+    {
+        if (_lvFreeze.SelectedItems.Count == 0) { _status.Text = "Selecciona una entrada congelada."; return; }
+        int idx = _lvFreeze.SelectedIndices[0];
+        if (idx >= 0 && idx < _frozen.Count) _frozen.RemoveAt(idx);
+        _lvFreeze.Items.RemoveAt(idx);
+        if (_frozen.Count == 0) _freezeTimer?.Stop();
+        _status.Text = "Descongelado.";
     }
 
     // ---------------- Utilidades ----------------

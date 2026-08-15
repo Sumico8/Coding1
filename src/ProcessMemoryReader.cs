@@ -48,6 +48,7 @@ public sealed record SearchHit(ulong Address, string Encoding, string Preview);
 public sealed class ProcessMemoryReader : IDisposable
 {
     private IntPtr _handle = IntPtr.Zero;
+    private IntPtr _writeHandle = IntPtr.Zero;
     public int ProcessId { get; }
     public bool IsOpen => _handle != IntPtr.Zero;
 
@@ -130,6 +131,46 @@ public sealed class ProcessMemoryReader : IDisposable
         var partial = new byte[readCount];
         Array.Copy(buffer, partial, readCount);
         return partial;
+    }
+
+    /// <summary>
+    /// Escribe bytes en la memoria del proceso (editor estilo trainer). Abre BAJO
+    /// DEMANDA un segundo handle con permiso de escritura; el handle de lectura
+    /// sigue siendo de solo lectura. Pensado para EDITAR valores en procesos que
+    /// tu abres (tu laboratorio, tus juegos). NO inyecta codigo ni crea hilos
+    /// remotos: solo modifica bytes en una direccion que tu indicas.
+    /// </summary>
+    public int WriteBytes(ulong address, byte[] data)
+    {
+        EnsureOpen();
+        if (data == null || data.Length == 0) return 0;
+        EnsureWriteHandle();
+
+        bool ok = NativeMethods.WriteProcessMemory(
+            _writeHandle, (IntPtr)address, data, (IntPtr)data.Length, out IntPtr written);
+        if (!ok)
+        {
+            int err = Marshal.GetLastWin32Error();
+            throw new Win32Exception(err,
+                $"No se pudo escribir en 0x{address:X}. Codigo Win32: {err} " +
+                "(la region puede estar protegida o no permitir escritura).");
+        }
+        return (int)written;
+    }
+
+    private void EnsureWriteHandle()
+    {
+        if (_writeHandle != IntPtr.Zero) return;
+        uint access = NativeMethods.PROCESS_QUERY_INFORMATION | NativeMethods.PROCESS_VM_READ
+            | NativeMethods.PROCESS_VM_WRITE | NativeMethods.PROCESS_VM_OPERATION;
+        _writeHandle = NativeMethods.OpenProcess(access, false, ProcessId);
+        if (_writeHandle == IntPtr.Zero)
+        {
+            int err = Marshal.GetLastWin32Error();
+            throw new Win32Exception(err,
+                $"No se pudo abrir el proceso {ProcessId} con permiso de escritura. " +
+                $"Codigo Win32: {err} (ejecuta como Administrador; los procesos protegidos no permiten escritura).");
+        }
     }
 
     /// <summary>
@@ -487,6 +528,11 @@ public sealed class ProcessMemoryReader : IDisposable
         {
             NativeMethods.CloseHandle(_handle);
             _handle = IntPtr.Zero;
+        }
+        if (_writeHandle != IntPtr.Zero)
+        {
+            NativeMethods.CloseHandle(_writeHandle);
+            _writeHandle = IntPtr.Zero;
         }
     }
 }

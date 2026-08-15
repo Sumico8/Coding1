@@ -84,6 +84,8 @@ internal static class CliRunner
                     return CmdBundle(opts, elevated);
                 case "rules":
                     return CmdRules(opts, elevated);
+                case "write":
+                    return CmdWrite(opts, elevated);
                 default:
                     Console.Error.WriteLine(
                         $"Verbo desconocido: '{verb}'. Ejecuta 'MemReader.exe help' para ver el uso.");
@@ -513,6 +515,35 @@ internal static class CliRunner
         return 0;
     }
 
+    private static int CmdWrite(Dictionary<string, string> opts, bool elevated)
+    {
+        int pid = RequirePid(opts);
+        WarnIfNotElevated(elevated);
+        if (!opts.TryGetValue("addr", out var addrStr) || !TryParseHex(addrStr, out ulong addr))
+            throw new CliUsageException("Falta o es invalida la opcion --addr <hex>.");
+
+        var (kind, value) = ResolveWriteValue(opts);
+        byte[] bytes;
+        try { bytes = ValueInterpreter.ToBytes(kind, value); }
+        catch (Exception ex) { throw new CliUsageException($"Valor invalido para {kind}: {ex.Message}"); }
+
+        using var reader = new ProcessMemoryReader(pid);
+        int n = reader.WriteBytes(addr, bytes);
+        Console.Error.WriteLine($"Escritos {n} bytes en 0x{addr:X} ({kind} = {value}).");
+        return 0;
+    }
+
+    private static (string kind, string value) ResolveWriteValue(Dictionary<string, string> opts)
+    {
+        if (opts.TryGetValue("int32", out var v)) return ("Int32", v);
+        if (opts.TryGetValue("int64", out v)) return ("Int64", v);
+        if (opts.TryGetValue("float", out v)) return ("Float", v);
+        if (opts.TryGetValue("double", out v)) return ("Double", v);
+        if (opts.TryGetValue("bytes", out v)) return ("Bytes hex", v);
+        if (opts.TryGetValue("text", out v)) return ("Texto", v);
+        throw new CliUsageException("Indica que escribir: --int32, --int64, --float, --double, --bytes o --text.");
+    }
+
     private static int PrintHelp()
     {
         Console.WriteLine(
@@ -563,6 +594,10 @@ VERBOS:
             --full incluye un minidump de memoria completa (grande).
   rules     --pid <N> [--out <archivo.csv>]
             Aplica reglas heuristicas de triage (inyeccion, shellcode, packers...).
+  write     --pid <N> --addr <hex> (--int32 V | --int64 V | --float V |
+            --double V | --bytes <hex> | --text <s>)
+            Escribe un valor en una direccion (editor tipo trainer, procesos
+            propios/autorizados). No inyecta codigo.
   version   Muestra la version.
   help      Muestra esta ayuda.
 

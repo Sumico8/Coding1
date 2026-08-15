@@ -141,6 +141,17 @@ public static class ValueInterpreter
         return (pat.ToArray(), mask.ToArray());
     }
 
+    /// <summary>
+    /// Convierte un valor tipado a los bytes que se escribiran en memoria. Soporta
+    /// los mismos tipos que la busqueda mas "Texto" (ASCII). Lanza si es invalido.
+    /// </summary>
+    public static byte[] ToBytes(string kind, string text)
+    {
+        if (kind == "Texto" || kind == "Text")
+            return System.Text.Encoding.Latin1.GetBytes(text);
+        return BuildPattern(kind, text).pattern;
+    }
+
     private static byte[] ParseHexBytes(string text)
     {
         // Acepta "DE AD BE EF", "DEADBEEF" o "0xDE,0xAD".

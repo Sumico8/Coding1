@@ -1,8 +1,9 @@
 # MemReader
 
-Herramienta de **lectura de memoria de procesos** para Windows 11, pensada para
-pentesting, análisis de malware en laboratorio, forense y CTF. Es una aplicación
-de escritorio (WinForms, .NET 8) que:
+Herramienta de **análisis de memoria de procesos** para Windows 11, pensada para
+pentesting, análisis de malware en laboratorio, forense y CTF. El análisis es de
+solo lectura; además incluye un **editor de valores acotado** (tipo *trainer*) para
+procesos que tú abras. Es una aplicación de escritorio (WinForms, .NET 8) que:
 
 - Lista todos los procesos en ejecución.
 - Abre el proceso que selecciones **en modo solo lectura**, mostrando su
@@ -66,6 +67,9 @@ de escritorio (WinForms, .NET 8) que:
 - **Triage de toda la máquina**: recorre los procesos accesibles y los ordena por
   sospecha (regiones RWX, ejecutable no respaldado, hilos con inicio anómalo).
 - **Búsqueda AOB con comodines**: patrones de bytes tipo `48 8B ?? ?? E8`.
+- **Editor de valores (tipo *trainer*)**: escribe un valor tipado o bytes en una
+  dirección y **"congela"** valores (los reescribe cada 250 ms), sobre procesos que
+  tú abras. Sin inyección de código; solo para tus procesos/juegos o laboratorio.
 - **Contexto del proceso**: línea de comandos, PID padre (cadena padre-hijo),
   sesión y hora de inicio — IOCs de primer nivel para triage.
 - **Nivel de protección y mitigaciones**: PPL/Protected y su firmante, más CFG,
@@ -75,11 +79,19 @@ de escritorio (WinForms, .NET 8) que:
 - **Modo CLI headless** para automatizar todo lo anterior por línea de comandos.
 
 Todo se apoya en APIs **documentadas y soportadas** de Windows
-(`OpenProcess`, `VirtualQueryEx`, `ReadProcessMemory`, `NtQuerySystemInformation`…).
-No modifica la memoria de otros procesos: solo la lee. La única ampliación sobre el
-acceso mínimo de solo lectura es un handle aparte con `PROCESS_DUP_HANDLE` que se
-abre **solo** para la función de enumerar handles (duplicar y consultar tipo/nombre);
-nunca se pide acceso de escritura a la memoria del proceso.
+(`OpenProcess`, `VirtualQueryEx`, `ReadProcessMemory`, `WriteProcessMemory`,
+`NtQuerySystemInformation`…). El análisis es de **solo lectura** por defecto.
+
+Sobre ese mínimo hay dos ampliaciones, ambas explícitas y acotadas:
+- Un handle aparte con `PROCESS_DUP_HANDLE`, solo para la función de enumerar handles
+  (duplicar y consultar tipo/nombre).
+- Un handle aparte con `PROCESS_VM_WRITE`, que se abre **solo cuando tú usas el editor**
+  (pestaña *Editar* o el verbo `write`) para **modificar valores** en procesos que tú
+  abres — un editor tipo *trainer* para tu laboratorio o tus juegos.
+
+Lo que **no** hace, a propósito: no inyecta código, no crea hilos remotos, no incluye
+driver de kernel y no intenta evadir antivirus/EDR. Es un editor de valores, no un
+cargador de código. Úsalo solo sobre procesos **propios o autorizados**.
 
 ---
 
@@ -171,6 +183,8 @@ MemReader.exe search    --pid <N> --aob "48 8B ?? E8" [--out hits.csv]
 MemReader.exe scan-all  [--filter <txt>] [--out maquina.csv]
 MemReader.exe info      --pid <N> [--out info.csv]
 MemReader.exe bundle    --pid <N> [--out caso.zip] [--full]
+MemReader.exe rules     --pid <N> [--out reglas.csv]
+MemReader.exe write     --pid <N> --addr 0x... --int32 <v>   (editor)
 MemReader.exe dump      --pid <N> --out <carpeta>
 MemReader.exe minidump  --pid <N> [--out pid.dmp]
 MemReader.exe help
@@ -233,9 +247,10 @@ También puedes usar el script incluido:
 - El binario se compila como **x64**; el struct `MEMORY_BASIC_INFORMATION` usa el
   layout de 64 bits.
 - El lector de memoria solo solicita `PROCESS_QUERY_INFORMATION | PROCESS_VM_READ`.
-  No se pide acceso de escritura. La única excepción es la función de enumerar
-  handles, que abre un handle aparte con `PROCESS_DUP_HANDLE` (necesario para
-  duplicar y consultar el tipo/nombre de cada handle); tampoco escribe nada.
+  El acceso de escritura (`PROCESS_VM_WRITE | PROCESS_VM_OPERATION`) se pide en un
+  handle aparte y **solo cuando usas el editor** (pestaña *Editar* / verbo `write`).
+  La enumeración de handles abre otro handle aparte con `PROCESS_DUP_HANDLE`. Ningún
+  camino inyecta código ni crea hilos en el proceso objetivo.
 - Windows **denegará** el acceso a procesos protegidos (PPL) aunque seas
   Administrador. Es el comportamiento correcto y esperado; verás un error Win32
   (normalmente `5 = Acceso denegado`).
