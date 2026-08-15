@@ -58,6 +58,14 @@ public sealed class MainForm : Form
 
     private static readonly Font Mono = new("Consolas", 9F);
 
+    // Colores suaves para senalar regiones segun su peligrosidad (columna Permisos).
+    private static readonly Color DangerBack = Color.FromArgb(255, 224, 224); // rojo suave: RWX
+    private static readonly Color CodeBack = Color.FromArgb(255, 244, 214);   // ambar suave: ejecutable
+    private static readonly Color BarBack = Color.FromArgb(245, 246, 248);    // fondo claro de barras
+
+    // Tooltip reutilizable: explica cada campo/boton en lenguaje sencillo.
+    private readonly ToolTip _tips = new() { AutoPopDelay = 20000, InitialDelay = 400, ReshowDelay = 100 };
+
     public MainForm()
     {
         Text = "MemReader - Lector de memoria de procesos (user-mode, solo lectura)";
@@ -67,17 +75,23 @@ public sealed class MainForm : Form
         MinimumSize = new Size(960, 600);
 
         // ---------- Barra superior ----------
-        var topBar = new Panel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(8, 8, 8, 4) };
-        var btnRefresh = new Button { Text = "Actualizar procesos", Left = 0, Top = 6, Width = 150, Anchor = AnchorStyles.Left | AnchorStyles.Top };
+        var topBar = new Panel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(8, 8, 8, 4), BackColor = BarBack };
+        var btnRefresh = new Button { Text = "\U0001F504 Actualizar procesos", Left = 8, Top = 6, Width = 175, Anchor = AnchorStyles.Left | AnchorStyles.Top };
         btnRefresh.Click += (_, _) => LoadProcesses();
+        _tips.SetToolTip(btnRefresh, "Vuelve a leer la lista de programas en ejecucion.");
 
-        var lblFilter = new Label { Text = "Filtro:", Left = 160, Top = 11, Width = 45, Anchor = AnchorStyles.Left | AnchorStyles.Top };
-        _txtFilter = new TextBox { Left = 205, Top = 8, Width = 200, Anchor = AnchorStyles.Left | AnchorStyles.Top };
+        var lblFilter = new Label { Text = "Filtro:", Left = 192, Top = 11, Width = 45, Anchor = AnchorStyles.Left | AnchorStyles.Top };
+        _txtFilter = new TextBox { Left = 237, Top = 8, Width = 180, Anchor = AnchorStyles.Left | AnchorStyles.Top };
         _txtFilter.TextChanged += (_, _) => LoadProcesses();
+        _tips.SetToolTip(_txtFilter, "Escribe parte del nombre o el numero (PID) para filtrar la lista.");
 
-        _lblAdmin = new Label { Left = 430, Top = 11, Width = 700, Anchor = AnchorStyles.Left | AnchorStyles.Top, ForeColor = Color.DarkRed };
+        var btnHelp = new Button { Text = "\U00002753 Que es esto?", Left = 427, Top = 6, Width = 150, Anchor = AnchorStyles.Left | AnchorStyles.Top };
+        btnHelp.Click += (_, _) => ShowHelp();
+        _tips.SetToolTip(btnHelp, "Abre una guia rapida que explica que significa cada cosa.");
 
-        topBar.Controls.AddRange(new Control[] { btnRefresh, lblFilter, _txtFilter, _lblAdmin });
+        _lblAdmin = new Label { Left = 587, Top = 11, Width = 560, Anchor = AnchorStyles.Left | AnchorStyles.Top, ForeColor = Color.DarkRed };
+
+        topBar.Controls.AddRange(new Control[] { btnRefresh, lblFilter, _txtFilter, btnHelp, _lblAdmin });
 
         // ---------- Split principal (izquierda: procesos / derecha: analisis) ----------
         var split1 = new SplitContainer { Dock = DockStyle.Fill, FixedPanel = FixedPanel.Panel1 };
@@ -92,12 +106,14 @@ public sealed class MainForm : Form
             MultiSelect = false,
             HideSelection = false
         };
-        _lvProcesses.Columns.Add("PID", 70);
-        _lvProcesses.Columns.Add("Proceso", 230);
+        _lvProcesses.Columns.Add("PID (numero)", 90);
+        _lvProcesses.Columns.Add("Programa", 210);
         _lvProcesses.DoubleClick += (_, _) => AnalyzeSelectedProcess();
+        _tips.SetToolTip(_lvProcesses, "Elige el programa que quieres inspeccionar y pulsa Analizar (o doble clic).");
 
-        var btnAnalyze = new Button { Text = "Analizar proceso seleccionado", Dock = DockStyle.Bottom, Height = 34 };
+        var btnAnalyze = new Button { Text = "\U0001F50D Analizar proceso seleccionado", Dock = DockStyle.Bottom, Height = 34 };
         btnAnalyze.Click += (_, _) => AnalyzeSelectedProcess();
+        _tips.SetToolTip(btnAnalyze, "Abre el programa elegido en modo SOLO LECTURA para ver su memoria.");
 
         var leftPanel = new Panel { Dock = DockStyle.Fill };
         leftPanel.Controls.Add(_lvProcesses);
@@ -108,19 +124,24 @@ public sealed class MainForm : Form
         var split2 = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal };
 
         // Regiones (arriba)
-        _lblProcess = new Label { Dock = DockStyle.Top, Height = 24, Text = "Ningun proceso abierto.", Padding = new Padding(4, 4, 0, 0), Font = new Font("Segoe UI", 9F, FontStyle.Bold) };
+        _lblProcess = new Label { Dock = DockStyle.Top, Height = 24, Text = "Ningun proceso abierto.", Padding = new Padding(4, 4, 0, 0), Font = new Font("Segoe UI", 9F, FontStyle.Bold), BackColor = BarBack };
 
-        var regionsBar = new Panel { Dock = DockStyle.Top, Height = 32 };
+        var regionsBar = new Panel { Dock = DockStyle.Top, Height = 32, BackColor = BarBack };
         _chkOnlyReadable = new CheckBox { Text = "Solo regiones legibles", Checked = true, Left = 4, Top = 6, Width = 170 };
         _chkOnlyReadable.CheckedChanged += (_, _) => { if (_reader != null) EnumerateRegions(); };
-        var btnDump = new Button { Text = "Volcar region a archivo...", Left = 180, Top = 3, Width = 190 };
+        _tips.SetToolTip(_chkOnlyReadable, "Muestra solo las zonas de memoria que se pueden leer.");
+        var btnDump = new Button { Text = "\U0001F4BE Volcar region a archivo...", Left = 178, Top = 3, Width = 185 };
         btnDump.Click += (_, _) => DumpSelectedRegion();
-        var btnDumpAll = new Button { Text = "Volcar TODO a carpeta...", Left = 376, Top = 3, Width = 200 };
+        _tips.SetToolTip(btnDump, "Guarda en un archivo .bin el contenido de la region seleccionada.");
+        var btnDumpAll = new Button { Text = "\U0001F4BE Volcar TODO a carpeta...", Left = 367, Top = 3, Width = 190 };
         btnDumpAll.Click += (_, _) => DumpAllRegions();
-        var btnMinidump = new Button { Text = "Minidump (.dmp)...", Left = 584, Top = 3, Width = 150 };
+        _tips.SetToolTip(btnDumpAll, "Guarda TODAS las regiones legibles en una carpeta, con un indice.");
+        var btnMinidump = new Button { Text = "\U0001F4CA Minidump (.dmp)...", Left = 561, Top = 3, Width = 150 };
         btnMinidump.Click += (_, _) => WriteMinidump();
-        var btnEntropy = new Button { Text = "Entropia", Left = 742, Top = 3, Width = 90 };
+        _tips.SetToolTip(btnMinidump, "Crea un volcado .dmp completo (analizable en WinDbg).");
+        var btnEntropy = new Button { Text = "\U0001F4CA Entropia", Left = 715, Top = 3, Width = 110 };
         btnEntropy.Click += (_, _) => ComputeEntropy();
+        _tips.SetToolTip(btnEntropy, "Mide lo aleatorios que son los datos: alto (rojo) puede ser cifrado o comprimido.");
         regionsBar.Controls.AddRange(new Control[] { _chkOnlyReadable, btnDump, btnDumpAll, btnMinidump, btnEntropy });
 
         _lvRegions = new ListView
@@ -132,12 +153,14 @@ public sealed class MainForm : Form
             MultiSelect = false,
             HideSelection = false
         };
-        _lvRegions.Columns.Add("Direccion base", 160);
-        _lvRegions.Columns.Add("Tamano", 90);
-        _lvRegions.Columns.Add("Proteccion", 90);
-        _lvRegions.Columns.Add("Tipo", 90);
-        _lvRegions.Columns.Add("Entropia", 80);
+        _lvRegions.Columns.Add("Direccion base (hex)", 150);
+        _lvRegions.Columns.Add("Tamano", 80);
+        _lvRegions.Columns.Add("Permisos", 230);
+        _lvRegions.Columns.Add("Tipo de memoria", 190);
+        _lvRegions.Columns.Add("Entropia (0-8)", 90);
+        _lvRegions.Columns.Add("Pertenece a", 160);
         _lvRegions.SelectedIndexChanged += (_, _) => OnRegionSelected();
+        _tips.SetToolTip(_lvRegions, "Cada fila es una zona de memoria. Rojo = ejecutable+escritura (peligroso), ambar = codigo.");
 
         var regionsHost = new Panel { Dock = DockStyle.Fill };
         regionsHost.Controls.Add(_lvRegions);
@@ -197,7 +220,32 @@ public sealed class MainForm : Form
             _scanCts?.Cancel();
             _secCts?.Cancel();
             _reader?.Dispose();
+            _tips.Dispose();
         };
+    }
+
+    /// <summary>Guia rapida en lenguaje sencillo (boton "Que es esto?").</summary>
+    private void ShowHelp()
+    {
+        MessageBox.Show(this,
+            "Guia rapida de MemReader\r\n\r\n" +
+            "Esta app LEE (nunca modifica) la memoria de un programa que tu elijas.\r\n\r\n" +
+            "COMO EMPEZAR\r\n" +
+            "  1) Pulsa 'Actualizar procesos' y elige un programa de la lista.\r\n" +
+            "  2) Pulsa 'Analizar proceso seleccionado'.\r\n" +
+            "  3) Mira las regiones de memoria y usa las pestanas de abajo.\r\n\r\n" +
+            "COLORES DE LAS REGIONES (columna Permisos)\r\n" +
+            "  Rojo suave  = Ejecutable + escritura: raro y peligroso (tipico de codigo inyectado).\r\n" +
+            "  Ambar suave = Codigo del programa (ejecutable).\r\n" +
+            "  Sin color   = Datos normales.\r\n\r\n" +
+            "PALABRAS UTILES\r\n" +
+            "  Direccion     = posicion exacta en memoria (numero hex, empieza por 0x).\r\n" +
+            "  Modulo        = un archivo de programa cargado (DLL o EXE).\r\n" +
+            "  'Pertenece a' = a que modulo pertenece esa direccion (se identifica solo).\r\n" +
+            "  Offset        = distancia desde el inicio de un modulo (modulo + 0x...).\r\n\r\n" +
+            "Consejo: pasa el raton por encima de cualquier campo o boton para ver una ayuda corta.",
+            "Que es esto? - Ayuda de MemReader",
+            MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     // Referencias temporales usadas al construir las pestanas.
@@ -207,21 +255,27 @@ public sealed class MainForm : Form
 
     private TabPage BuildHexTab()
     {
-        var page = new TabPage("Visor hexadecimal");
+        var page = new TabPage("\U0001F50D Ver contenido");
         var bar = new Panel { Dock = DockStyle.Top, Height = 34 };
 
         var lblAddr = new Label { Text = "Direccion (hex):", Left = 4, Top = 9, Width = 100 };
         _hexAddress = new TextBox { Left = 106, Top = 6, Width = 150, Font = Mono };
+        _tips.SetToolTip(_hexAddress, "Posicion exacta en memoria a leer, en hexadecimal (p.ej. 0x7FF6ABCD1000).");
         var lblSize = new Label { Text = "Bytes:", Left = 262, Top = 9, Width = 45 };
         _hexSize = new TextBox { Left = 308, Top = 6, Width = 70, Text = "4096", Font = Mono };
+        _tips.SetToolTip(_hexSize, "Cuantos bytes leer desde esa direccion.");
         var btnRead = new Button { Text = "Leer", Left = 384, Top = 4, Width = 64 };
         btnRead.Click += (_, _) => ReadHexAtAddress();
+        _tips.SetToolTip(btnRead, "Lee y muestra el contenido de esa direccion.");
         var btnCopy = new Button { Text = "Copiar", Left = 452, Top = 4, Width = 72 };
         btnCopy.Click += (_, _) => CopyHexToClipboard();
+        _tips.SetToolTip(btnCopy, "Copia el volcado al portapapeles.");
         var btnExport = new Button { Text = "Exportar...", Left = 528, Top = 4, Width = 88 };
         btnExport.Click += (_, _) => ExportHexToFile();
+        _tips.SetToolTip(btnExport, "Guarda el volcado como archivo de texto.");
         _chkAutoRefresh = new CheckBox { Text = "Auto 1s", Left = 624, Top = 7, Width = 80 };
         _chkAutoRefresh.CheckedChanged += (_, _) => ToggleAutoRefresh();
+        _tips.SetToolTip(_chkAutoRefresh, "Vuelve a leer cada segundo para ver como cambia un valor en vivo.");
 
         bar.Controls.AddRange(new Control[]
         {
@@ -246,7 +300,7 @@ public sealed class MainForm : Form
         {
             Dock = DockStyle.Top,
             Height = 20,
-            Text = "Interpretacion de los primeros bytes de la direccion:",
+            Text = "Que es esta direccion e interpretacion de sus primeros bytes:",
             Padding = new Padding(4, 3, 0, 0),
             ForeColor = Color.Gray
         };
@@ -272,7 +326,7 @@ public sealed class MainForm : Form
 
     private TabPage BuildSearchTab(out TextBox txtSearch, out ListView lvResults, out Button btnSearch)
     {
-        var page = new TabPage("Buscar en memoria");
+        var page = new TabPage("\U0001F50E Buscar un valor");
         var bar = new Panel { Dock = DockStyle.Top, Height = 34 };
 
         var lblType = new Label { Text = "Tipo:", Left = 4, Top = 9, Width = 38 };
@@ -283,14 +337,17 @@ public sealed class MainForm : Form
         };
         _cmbSearchType.Items.AddRange(new object[] { "Texto", "Int32", "Int64", "Float", "Double", "Bytes hex" });
         _cmbSearchType.SelectedIndex = 0;
+        _tips.SetToolTip(_cmbSearchType, "Que tipo de dato buscar: Texto, un numero (Int32/Int64/Float/Double) o Bytes hex.");
 
         var lbl = new Label { Text = "Valor:", Left = 150, Top = 9, Width = 45 };
         txtSearch = new TextBox { Left = 196, Top = 6, Width = 260, Font = Mono };
+        _tips.SetToolTip(txtSearch, "Escribe aqui lo que quieres encontrar en la memoria.");
         btnSearch = new Button { Text = "Buscar", Left = 462, Top = 4, Width = 84 };
         var localBtn = btnSearch;
         btnSearch.Click += (_, _) => ToggleSearch();
         var btnCsv = new Button { Text = "Exportar CSV...", Left = 552, Top = 4, Width = 120 };
         btnCsv.Click += (_, _) => ExportResultsCsv();
+        _tips.SetToolTip(btnCsv, "Guarda los resultados en un archivo CSV (abrible en Excel).");
 
         bar.Controls.AddRange(new Control[] { lblType, _cmbSearchType, lbl, txtSearch, localBtn, btnCsv });
 
@@ -302,9 +359,10 @@ public sealed class MainForm : Form
             GridLines = true,
             MultiSelect = false
         };
-        lvResults.Columns.Add("Direccion", 170);
-        lvResults.Columns.Add("Tipo", 110);
-        lvResults.Columns.Add("Valor", 400);
+        lvResults.Columns.Add("Direccion", 150);
+        lvResults.Columns.Add("Tipo de dato", 110);
+        lvResults.Columns.Add("Valor", 330);
+        lvResults.Columns.Add("Pertenece a", 160);
         var localResults = lvResults;
         lvResults.DoubleClick += (_, _) => JumpToResult(localResults);
 
@@ -325,7 +383,7 @@ public sealed class MainForm : Form
 
     private TabPage BuildModulesTab()
     {
-        var page = new TabPage("Modulos");
+        var page = new TabPage("\U0001F9E9 Programas cargados");
 
         _lvModules = new ListView
         {
@@ -335,11 +393,12 @@ public sealed class MainForm : Form
             GridLines = true,
             MultiSelect = false
         };
-        _lvModules.Columns.Add("Direccion base", 150);
+        _lvModules.Columns.Add("Direccion base (hex)", 150);
         _lvModules.Columns.Add("Tamano", 90);
-        _lvModules.Columns.Add("Modulo", 180);
-        _lvModules.Columns.Add("Ruta", 460);
+        _lvModules.Columns.Add("Nombre del modulo", 180);
+        _lvModules.Columns.Add("Ruta del archivo", 460);
         _lvModules.DoubleClick += (_, _) => JumpToModule();
+        _tips.SetToolTip(_lvModules, "Archivos de programa (DLL/EXE) cargados. Doble clic salta a su direccion base.");
 
         var hint = new Label
         {
@@ -357,20 +416,25 @@ public sealed class MainForm : Form
 
     private TabPage BuildPointersTab()
     {
-        var page = new TabPage("Punteros");
+        var page = new TabPage("\U0001F3AF Punteros y rutas");
         var bar = new Panel { Dock = DockStyle.Top, Height = 66 };
 
         var lblT = new Label { Text = "Objetivo (hex):", Left = 4, Top = 9, Width = 100 };
         _ptrTarget = new TextBox { Left = 106, Top = 6, Width = 160, Font = Mono };
+        _tips.SetToolTip(_ptrTarget, "La direccion cuyo 'camino' estable quieres encontrar (en hexadecimal).");
         var lblD = new Label { Text = "Prof.:", Left = 276, Top = 9, Width = 45 };
         _ptrDepth = new TextBox { Left = 322, Top = 6, Width = 40, Text = "4", Font = Mono };
+        _tips.SetToolTip(_ptrDepth, "Cuantos saltos de puntero encadenar (1 a 8). Mas = mas lento.");
         var lblO = new Label { Text = "Offset max (hex):", Left = 372, Top = 9, Width = 110 };
         _ptrMaxOff = new TextBox { Left = 484, Top = 6, Width = 80, Text = "1000", Font = Mono };
+        _tips.SetToolTip(_ptrMaxOff, "Distancia maxima permitida en cada salto, en hexadecimal.");
 
         var btnScan = new Button { Text = "Escanear rutas", Left = 4, Top = 34, Width = 130 };
         btnScan.Click += (_, _) => _ = DoPointerScanAsync();
+        _tips.SetToolTip(btnScan, "Busca rutas de puntero estables (modulo + offsets) que llevan al objetivo.");
         var btnOne = new Button { Text = "Que apunta aqui (1 nivel)", Left = 140, Top = 34, Width = 190 };
         btnOne.Click += (_, _) => _ = DoFindPointersAsync();
+        _tips.SetToolTip(btnOne, "Muestra que direcciones apuntan directamente al objetivo.");
         var btnStop = new Button { Text = "Detener", Left = 336, Top = 34, Width = 80 };
         btnStop.Click += (_, _) => _ptrCts?.Cancel();
 
@@ -387,8 +451,8 @@ public sealed class MainForm : Form
             GridLines = true,
             MultiSelect = false
         };
-        _lvPointers.Columns.Add("Ruta / direccion", 640);
-        _lvPointers.Columns.Add("Base / modulo", 220);
+        _lvPointers.Columns.Add("Ruta de punteros", 620);
+        _lvPointers.Columns.Add("Ancla (modulo + offset)", 300);
         _lvPointers.DoubleClick += (_, _) => ResolveSelectedPointer();
 
         var hint = new Label
@@ -408,7 +472,7 @@ public sealed class MainForm : Form
 
     private TabPage BuildScanTab()
     {
-        var page = new TabPage("Escaneo");
+        var page = new TabPage("\U0001F4C9 Afinar busqueda");
         var bar = new Panel { Dock = DockStyle.Top, Height = 66 };
 
         var lblType = new Label { Text = "Tipo:", Left = 4, Top = 9, Width = 38 };
@@ -416,18 +480,23 @@ public sealed class MainForm : Form
         _cmbScanType.Items.AddRange(new object[] { "Int32", "Int64", "Float", "Double" });
         _cmbScanType.SelectedIndex = 0;
 
+        _tips.SetToolTip(_cmbScanType, "El tipo de numero que buscas (entero de 32/64 bits o decimal).");
         var lblVal = new Label { Text = "Valor:", Left = 142, Top = 9, Width = 45 };
         _txtScanValue = new TextBox { Left = 188, Top = 6, Width = 150, Font = Mono };
+        _tips.SetToolTip(_txtScanValue, "El valor actual (p.ej. tu vida o tu dinero en un juego de pruebas).");
 
         var btnFirst = new Button { Text = "Primer escaneo", Left = 4, Top = 34, Width = 130 };
         btnFirst.Click += (_, _) => _ = DoFirstScanAsync();
+        _tips.SetToolTip(btnFirst, "Primera busqueda: encuentra todas las direcciones con ese valor.");
 
         var lblF = new Label { Text = "Filtro:", Left = 142, Top = 38, Width = 45 };
         _cmbScanFilter = new ComboBox { Left = 188, Top = 35, Width = 130, DropDownStyle = ComboBoxStyle.DropDownList };
-        _cmbScanFilter.Items.AddRange(new object[] { "Exacto", "Cambio", "No cambio", "Aumento", "Disminuyo" });
+        _cmbScanFilter.Items.AddRange(new object[] { "Igual a (exacto)", "Cambio", "No cambio", "Aumento", "Disminuyo" });
         _cmbScanFilter.SelectedIndex = 1;
+        _tips.SetToolTip(_cmbScanFilter, "Como estrechar: cambia el valor en el programa y elige que paso (cambio, aumento...).");
         var btnNext = new Button { Text = "Siguiente escaneo", Left = 324, Top = 34, Width = 150 };
         btnNext.Click += (_, _) => _ = DoNextScanAsync();
+        _tips.SetToolTip(btnNext, "Refina los candidatos anteriores segun el filtro elegido.");
         var btnStop = new Button { Text = "Detener", Left = 480, Top = 34, Width = 80 };
         btnStop.Click += (_, _) => _scanCts?.Cancel();
 
@@ -446,7 +515,7 @@ public sealed class MainForm : Form
         };
         _lvScan.Columns.Add("Direccion", 180);
         _lvScan.Columns.Add("Valor", 160);
-        _lvScan.Columns.Add("Base / modulo", 260);
+        _lvScan.Columns.Add("Pertenece a", 300);
         _lvScan.DoubleClick += (_, _) => JumpFromScan();
 
         var hint = new Label
@@ -466,15 +535,18 @@ public sealed class MainForm : Form
 
     private TabPage BuildDisasmTab()
     {
-        var page = new TabPage("Desensamblado");
+        var page = new TabPage("\U00002699 Codigo (ensamblador)");
         var bar = new Panel { Dock = DockStyle.Top, Height = 34 };
 
         var lblA = new Label { Text = "Direccion (hex):", Left = 4, Top = 9, Width = 100 };
         _disasmAddr = new TextBox { Left = 106, Top = 6, Width = 160, Font = Mono };
+        _tips.SetToolTip(_disasmAddr, "Direccion cuyo codigo maquina quieres traducir a ensamblador (hex).");
         var lblC = new Label { Text = "Instr.:", Left = 276, Top = 9, Width = 45 };
         _disasmCount = new TextBox { Left = 322, Top = 6, Width = 50, Text = "40", Font = Mono };
+        _tips.SetToolTip(_disasmCount, "Cuantas instrucciones mostrar.");
         var btnGo = new Button { Text = "Desensamblar", Left = 384, Top = 4, Width = 120 };
         btnGo.Click += (_, _) => DoDisassemble();
+        _tips.SetToolTip(btnGo, "Traduce los bytes de esa direccion a instrucciones de ensamblador.");
 
         bar.Controls.AddRange(new Control[] { lblA, _disasmAddr, lblC, _disasmCount, btnGo });
 
@@ -497,10 +569,11 @@ public sealed class MainForm : Form
 
     private TabPage BuildThreadsTab()
     {
-        var page = new TabPage("Hilos");
+        var page = new TabPage("\U0001F9F5 Hilos");
         var bar = new Panel { Dock = DockStyle.Top, Height = 34 };
         var btnGo = new Button { Text = "Listar hilos", Left = 4, Top = 4, Width = 120 };
         btnGo.Click += (_, _) => ListThreads();
+        _tips.SetToolTip(btnGo, "Lista los hilos (tareas) del programa y donde empieza cada uno.");
         bar.Controls.Add(btnGo);
 
         _lvThreads = new ListView
@@ -511,11 +584,12 @@ public sealed class MainForm : Form
             GridLines = true,
             MultiSelect = false
         };
-        _lvThreads.Columns.Add("TID", 90);
+        _lvThreads.Columns.Add("TID (numero)", 100);
         _lvThreads.Columns.Add("Direccion de inicio", 180);
-        _lvThreads.Columns.Add("Modulo de inicio", 260);
+        _lvThreads.Columns.Add("Pertenece a (inicio)", 300);
         _lvThreads.Columns.Add("Prioridad", 80);
         _lvThreads.DoubleClick += (_, _) => JumpFromThread();
+        _tips.SetToolTip(_lvThreads, "En rojo: hilos que empiezan fuera de todo modulo (posible codigo inyectado).");
 
         var hint = new Label
         {
@@ -534,15 +608,17 @@ public sealed class MainForm : Form
 
     private TabPage BuildSecurityTab()
     {
-        var page = new TabPage("Seguridad");
+        var page = new TabPage("\U0001F6E1 Seguridad");
         var bar = new Panel { Dock = DockStyle.Top, Height = 34 };
 
         var btnGo = new Button { Text = "Analizar seguridad", Left = 4, Top = 4, Width = 150 };
         btnGo.Click += (_, _) => _ = DoSecurityAnalysisAsync();
+        _tips.SetToolTip(btnGo, "Busca senales de peligro: memoria RWX, ejecutable sin modulo, modulos sin protecciones.");
         var btnStop = new Button { Text = "Detener", Left = 160, Top = 4, Width = 80 };
         btnStop.Click += (_, _) => _secCts?.Cancel();
         var btnCsv = new Button { Text = "Exportar CSV...", Left = 246, Top = 4, Width = 120 };
         btnCsv.Click += (_, _) => ExportSecurityCsv();
+        _tips.SetToolTip(btnCsv, "Guarda el informe de seguridad en un archivo CSV.");
 
         bar.Controls.AddRange(new Control[] { btnGo, btnStop, btnCsv });
 
@@ -554,10 +630,11 @@ public sealed class MainForm : Form
             GridLines = true,
             MultiSelect = false
         };
-        _lvSecurity.Columns.Add("Severidad", 80);
-        _lvSecurity.Columns.Add("Categoria", 180);
-        _lvSecurity.Columns.Add("Detalle", 560);
+        _lvSecurity.Columns.Add("Gravedad", 90);
+        _lvSecurity.Columns.Add("Categoria", 200);
+        _lvSecurity.Columns.Add("Que significa", 560);
         _lvSecurity.DoubleClick += (_, _) => JumpFromSecurity();
+        _tips.SetToolTip(_lvSecurity, "Hallazgos ordenados por gravedad. Rojo = alta. Doble clic salta a la direccion.");
 
         var hint = new Label
         {
@@ -576,17 +653,20 @@ public sealed class MainForm : Form
 
     private TabPage BuildStringsTab()
     {
-        var page = new TabPage("Strings");
+        var page = new TabPage("\U0001F524 Textos en memoria");
         var bar = new Panel { Dock = DockStyle.Top, Height = 34 };
 
         var lbl = new Label { Text = "Long. min:", Left = 4, Top = 9, Width = 70 };
         _txtMinLen = new TextBox { Left = 76, Top = 6, Width = 50, Text = "5", Font = Mono };
+        _tips.SetToolTip(_txtMinLen, "Longitud minima del texto a rescatar (evita ruido de cadenas muy cortas).");
         var btnGo = new Button { Text = "Extraer strings", Left = 134, Top = 4, Width = 130 };
         btnGo.Click += (_, _) => _ = DoExtractStringsAsync();
+        _tips.SetToolTip(btnGo, "Rescata todo el texto legible (ASCII/UTF-16) que hay en la memoria.");
         var btnStop = new Button { Text = "Detener", Left = 270, Top = 4, Width = 80 };
         btnStop.Click += (_, _) => _stringsCts?.Cancel();
         var btnCsv = new Button { Text = "Exportar CSV...", Left = 356, Top = 4, Width = 120 };
         btnCsv.Click += (_, _) => ExportStringsCsv();
+        _tips.SetToolTip(btnCsv, "Guarda los textos en un archivo CSV (abrible en Excel).");
 
         bar.Controls.AddRange(new Control[] { lbl, _txtMinLen, btnGo, btnStop, btnCsv });
 
@@ -599,8 +679,9 @@ public sealed class MainForm : Form
             MultiSelect = false
         };
         _lvStrings.Columns.Add("Direccion", 160);
-        _lvStrings.Columns.Add("Cod.", 70);
-        _lvStrings.Columns.Add("Texto", 620);
+        _lvStrings.Columns.Add("Codificacion", 90);
+        _lvStrings.Columns.Add("Texto", 500);
+        _lvStrings.Columns.Add("Pertenece a", 150);
         _lvStrings.DoubleClick += (_, _) => JumpToString();
 
         var hint = new Label
@@ -734,9 +815,11 @@ public sealed class MainForm : Form
             {
                 var item = new ListViewItem(r.BaseText) { Tag = r };
                 item.SubItems.Add(r.SizeText);
-                item.SubItems.Add(r.ProtectText);
-                item.SubItems.Add(r.TypeText);
-                item.SubItems.Add(""); // entropia (se rellena bajo demanda)
+                item.SubItems.Add($"{FriendlyNames.Protection(r.ProtectText)} ({r.ProtectText})");
+                item.SubItems.Add($"{FriendlyNames.RegionType(r.TypeText)} ({r.TypeText})");
+                item.SubItems.Add(""); // entropia (se rellena bajo demanda) -> SubItems[4]
+                item.SubItems.Add(FriendlyNames.ModuleShort(_scanner?.ResolveModuleOffset(r.BaseAddress)));
+                ColorRegionRow(item, r);
                 _lvRegions.Items.Add(item);
             }
             ulong totalBytes = 0;
@@ -790,7 +873,8 @@ public sealed class MainForm : Form
         {
             byte[] data = _reader.ReadBytes(address, size);
             _txtHex.Text = HexFormatter.Format(data, address);
-            _txtInterp.Text = ValueInterpreter.Describe(data);
+            string belongs = FriendlyNames.DescribeAddress(_scanner?.ResolveModuleOffset(address));
+            _txtInterp.Text = "\U0001F4CD " + belongs + "\r\n\r\n" + ValueInterpreter.Describe(data);
             _status.Text = $"Leidos {data.Length} bytes desde 0x{address:X}.";
         }
         catch (Win32Exception ex)
@@ -872,6 +956,7 @@ public sealed class MainForm : Form
                 var item = new ListViewItem("0x" + h.Address.ToString("X")) { Tag = h.Address };
                 item.SubItems.Add(h.Encoding);
                 item.SubItems.Add(h.Preview);
+                item.SubItems.Add(FriendlyNames.ModuleShort(_scanner?.ResolveModuleOffset(h.Address)));
                 _lvResults.Items.Add(item);
             }
             _lvResults.EndUpdate();
@@ -1168,8 +1253,8 @@ public sealed class MainForm : Form
             {
                 var mod = scanner.ResolveModuleOffset(h.Address);
                 string baseText = mod != null
-                    ? $"{mod.Value.mod.Name}+0x{mod.Value.offset:X} (estatica)"
-                    : "(dinamica)";
+                    ? FriendlyNames.DescribeAddress(mod) + " - ruta fija"
+                    : FriendlyNames.DescribeAddress(mod);
                 var it = new ListViewItem($"0x{h.Address:X}  (+0x{h.Offset:X})") { Tag = h.Address };
                 it.SubItems.Add(baseText);
                 _lvPointers.Items.Add(it);
@@ -1267,8 +1352,7 @@ public sealed class MainForm : Form
             if (shown++ >= 5000) break;
             var it = new ListViewItem("0x" + addr.ToString("X")) { Tag = addr };
             it.SubItems.Add(_scanSession.FormatValue(value));
-            var mod = _scanner?.ResolveModuleOffset(addr);
-            it.SubItems.Add(mod != null ? $"{mod.Value.mod.Name}+0x{mod.Value.offset:X}" : "(dinamica)");
+            it.SubItems.Add(FriendlyNames.DescribeAddress(_scanner?.ResolveModuleOffset(addr)));
             _lvScan.Items.Add(it);
         }
         _lvScan.EndUpdate();
@@ -1336,8 +1420,8 @@ public sealed class MainForm : Form
                 var it = new ListViewItem(t.Tid.ToString()) { Tag = t.StartAddress };
                 it.SubItems.Add("0x" + t.StartAddress.ToString("X"));
                 var mod = _scanner?.ResolveModuleOffset(t.StartAddress);
-                string modText = mod != null ? $"{mod.Value.mod.Name}+0x{mod.Value.offset:X}" : "(dinamica)";
-                if (mod == null && t.StartAddress != 0) it.ForeColor = Color.Firebrick;
+                string modText = FriendlyNames.DescribeAddress(mod);
+                if (mod == null && t.StartAddress != 0) { it.ForeColor = Color.Firebrick; it.BackColor = DangerBack; }
                 it.SubItems.Add(modText);
                 it.SubItems.Add(t.BasePriority.ToString());
                 _lvThreads.Items.Add(it);
@@ -1372,7 +1456,8 @@ public sealed class MainForm : Form
         try
         {
             byte[] code = _reader.ReadBytes(addr, Math.Min(count * 16, 65536));
-            _txtDisasm.Text = Disassembler.Disassemble(code, addr, bitness, count);
+            string belongs = FriendlyNames.DescribeAddress(_scanner?.ResolveModuleOffset(addr));
+            _txtDisasm.Text = "; " + belongs + "\r\n\r\n" + Disassembler.Disassemble(code, addr, bitness, count);
             _status.Text = $"Desensamblado desde 0x{addr:X} ({bitness} bits).";
         }
         catch (Win32Exception ex)
@@ -1402,8 +1487,9 @@ public sealed class MainForm : Form
                 var it = new ListViewItem(f.Severity) { Tag = f.Address };
                 it.SubItems.Add(f.Category);
                 it.SubItems.Add(f.Detail);
-                if (f.Severity == "Alta") it.ForeColor = Color.Firebrick;
-                else if (f.Severity == "Media") it.ForeColor = Color.DarkGoldenrod;
+                if (f.Severity == "Alta") { it.ForeColor = Color.Firebrick; it.BackColor = DangerBack; }
+                else if (f.Severity == "Media") { it.ForeColor = Color.DarkGoldenrod; it.BackColor = CodeBack; }
+                else it.BackColor = Color.FromArgb(255, 252, 220);
                 _lvSecurity.Items.Add(it);
             }
             _lvSecurity.EndUpdate();
@@ -1476,6 +1562,7 @@ public sealed class MainForm : Form
                 var it = new ListViewItem("0x" + s.Address.ToString("X")) { Tag = s.Address };
                 it.SubItems.Add(s.Encoding);
                 it.SubItems.Add(s.Text.Length > 400 ? s.Text[..400] : s.Text);
+                it.SubItems.Add(FriendlyNames.ModuleShort(_scanner?.ResolveModuleOffset(s.Address)));
                 _lvStrings.Items.Add(it);
             }
             _lvStrings.EndUpdate();
@@ -1595,6 +1682,19 @@ public sealed class MainForm : Form
         if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
             text = text[2..];
         return ulong.TryParse(text, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out address);
+    }
+
+    /// <summary>Colorea la fila de una region segun su peligrosidad (columna Permisos).</summary>
+    private static void ColorRegionRow(ListViewItem item, MemoryRegion r)
+    {
+        uint p = r.Protect & 0xFF;
+        bool rwx = p == NativeMethods.PAGE_EXECUTE_READWRITE;
+        bool exec = p == NativeMethods.PAGE_EXECUTE
+                 || p == NativeMethods.PAGE_EXECUTE_READ
+                 || p == NativeMethods.PAGE_EXECUTE_READWRITE
+                 || p == NativeMethods.PAGE_EXECUTE_WRITECOPY;
+        if (rwx) item.BackColor = DangerBack;      // rojo suave: ejecutable + escritura (peligroso)
+        else if (exec) item.BackColor = CodeBack;  // ambar suave: codigo ejecutable
     }
 
     private static string FormatBytes(ulong bytes)
