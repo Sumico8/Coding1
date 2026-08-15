@@ -24,6 +24,12 @@ de escritorio (WinForms, .NET 8) que:
 - **Escaneo iterativo (next-scan)**: primer escaneo por valor y refinado sucesivo
   (cambió / no cambió / aumentó / disminuyó / exacto) hasta dejar pocas direcciones;
   doble clic manda la dirección al visor y a la pestaña Punteros como objetivo.
+- **Escaneo de "valor desconocido"**: toma una instantánea de toda la memoria y refina
+  luego por *cambió / aumentó / disminuyó* sin conocer el número exacto — ideal para
+  barras que sólo ves como % (stamina, vida…).
+- **Editar y congelar valores** (modo edición, opcional): escribe un valor en las
+  direcciones seleccionadas del Escaneo y **congélalas** (🔒) para que no cambien, al
+  estilo Cheat Engine. Requiere activar el modo edición; solo para procesos propios.
 - **Punteros y offsets** (reversing): dada una dirección objetivo, encuentra qué la
   apunta (1 nivel) y **rutas de puntero estáticas** `modulo+offset -> +off -> ...`
   multinivel, ancladas a un módulo. Doble clic **resuelve la ruta en vivo** y salta
@@ -66,8 +72,11 @@ de escritorio (WinForms, .NET 8) que:
   etiqueta que coincide.
 
 Todo se apoya en APIs **documentadas y soportadas** de Windows
-(`OpenProcess`, `VirtualQueryEx`, `ReadProcessMemory`). No modifica la memoria de
-otros procesos: solo la lee.
+(`OpenProcess`, `VirtualQueryEx`, `ReadProcessMemory`). Por defecto **solo lee** la
+memoria. Existe un **modo edición opcional** (botón *✏ Edición* en la cabecera) que,
+tras confirmar un aviso, reabre el proceso con permiso de escritura
+(`WriteProcessMemory`) para poder **escribir y congelar valores**; úsalo únicamente
+sobre procesos **tuyos** o con autorización.
 
 ---
 
@@ -174,8 +183,10 @@ También puedes usar el script incluido:
 
 - El binario se compila como **x64**; el struct `MEMORY_BASIC_INFORMATION` usa el
   layout de 64 bits.
-- Solo se solicitan los permisos `PROCESS_QUERY_INFORMATION | PROCESS_VM_READ`.
-  No se pide acceso de escritura.
+- Por defecto solo se solicitan los permisos `PROCESS_QUERY_INFORMATION |
+  PROCESS_VM_READ`. El **modo edición** (opcional, bajo confirmación) reabre el
+  proceso añadiendo `PROCESS_VM_WRITE | PROCESS_VM_OPERATION` para escribir/congelar
+  valores; mientras no lo actives, la herramienta no pide acceso de escritura.
 - Windows **denegará** el acceso a procesos protegidos (PPL) aunque seas
   Administrador. Es el comportamiento correcto y esperado; verás un error Win32
   (normalmente `5 = Acceso denegado`).

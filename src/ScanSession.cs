@@ -44,6 +44,49 @@ public sealed class ScanSession
         _candidates = hits.Select(h => (h.Address, (byte[])pattern.Clone())).ToList();
     }
 
+    /// <summary>
+    /// Primer escaneo de "valor desconocido": toma una instantanea del valor de
+    /// TODAS las posiciones alineadas de la memoria legible. Luego se refina con
+    /// NextScan (cambio/aumento/disminucion) sin conocer el valor exacto.
+    /// </summary>
+    public void FirstScanUnknown(int maxCandidates, IProgress<string>? progress, CancellationToken ct)
+    {
+        var list = new List<(ulong addr, byte[] prev)>();
+        var regions = _reader.EnumerateRegions(onlyReadable: true);
+        const int chunk = 1 << 20;
+        int idx = 0;
+        foreach (var r in regions)
+        {
+            ct.ThrowIfCancellationRequested();
+            idx++;
+            progress?.Report($"Instantanea... region {idx}/{regions.Count} ({list.Count:N0})");
+
+            ulong pos = r.BaseAddress;
+            ulong end = r.BaseAddress + r.RegionSize;
+            while (pos < end)
+            {
+                ct.ThrowIfCancellationRequested();
+                int want = (int)Math.Min((ulong)chunk, end - pos);
+                byte[] data;
+                try { data = _reader.ReadBytes(pos, want); }
+                catch { break; }
+                if (data.Length < Size) break;
+
+                for (int i = 0; i + Size <= data.Length; i += Size)
+                {
+                    var val = new byte[Size];
+                    Array.Copy(data, i, val, 0, Size);
+                    list.Add((pos + (ulong)i, val));
+                    if (list.Count >= maxCandidates) { _candidates = list; return; }
+                }
+
+                if (data.Length < want) break;
+                pos += (ulong)data.Length;
+            }
+        }
+        _candidates = list;
+    }
+
     /// <summary>Refina los candidatos segun el filtro (y un valor exacto si aplica).</summary>
     public void NextScan(NextFilter filter, string? valueText, IProgress<string>? progress, CancellationToken ct)
     {

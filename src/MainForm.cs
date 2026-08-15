@@ -65,7 +65,10 @@ public sealed class MainForm : Form
     private TabPage _regionsPage = null!;
     private readonly Dictionary<TabPage, Button> _navButtons = new();
     private Button _btnTheme = null!;
+    private Button _btnEdit = null!;
     private TextBox _txtGlobalFind = null!;
+    private bool _editMode;
+    private readonly FrozenValues _frozen = new();
     private readonly AnnotationStore _store = new();
     private Identifier? _identifier;
     private ThemedListView _lvLabels = null!;
@@ -124,13 +127,18 @@ public sealed class MainForm : Form
         findStack.Controls.Add(lblFind);
         findStack.Controls.Add(_txtGlobalFind);
 
+        _btnEdit = new Button { Text = "✏ Solo lectura", Width = 132, Height = 30, Margin = new Padding(0, 5, 8, 0) };
+        _btnEdit.Click += (_, _) => ToggleEditMode();
         _btnTheme = new Button { Text = ThemeManager.IsDark ? "☀ Claro" : "🌙 Oscuro", Width = 104, Height = 30, Margin = new Padding(0, 5, 0, 0) };
         _btnTheme.Click += (_, _) => ThemeManager.Toggle();
+        var btnStack = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, WrapContents = false, AutoSize = true, Margin = new Padding(0) };
+        btnStack.Controls.Add(_btnEdit);
+        btnStack.Controls.Add(_btnTheme);
 
         header.Controls.Add(lblTitle, 0, 0);
         header.Controls.Add(infoStack, 1, 0);
         header.Controls.Add(findStack, 2, 0);
-        header.Controls.Add(_btnTheme, 3, 0);
+        header.Controls.Add(btnStack, 3, 0);
 
         // ---------- Contenido: todas las secciones alojadas en un panel ----------
         _content = new Panel { Dock = DockStyle.Fill, Padding = new Padding(8) };
@@ -193,6 +201,7 @@ public sealed class MainForm : Form
         _refreshTimer.Tick += (_, _) =>
         {
             if (_reader == null) return;
+            if (_editMode) _frozen.Apply(_reader);
             if (_chkAutoRefresh.Checked) ReadHexAtAddress();
             if (_lvLabels != null && _activePage == _lvLabels.Parent) RefreshLabelLiveValues();
         };
@@ -365,6 +374,11 @@ public sealed class MainForm : Form
         }
         if (_btnTheme != null)
             _btnTheme.Text = ThemeManager.IsDark ? "☀ Claro" : "🌙 Oscuro";
+        if (_btnEdit != null && _editMode)
+        {
+            _btnEdit.BackColor = ThemeManager.Current.AccentRed;
+            _btnEdit.ForeColor = ThemeManager.Current.SelectionText;
+        }
         ReapplySemanticColors();
         if (_activePage != null) ShowSection(_activePage); // re-resalta el boton activo
         Invalidate(true);
@@ -429,7 +443,8 @@ public sealed class MainForm : Form
     private void UpdateTimerState()
     {
         bool labelsActive = _lvLabels != null && _activePage == _lvLabels.Parent;
-        if (_reader != null && (_chkAutoRefresh.Checked || labelsActive))
+        bool needFreeze = _editMode && _frozen.Count > 0;
+        if (_reader != null && (_chkAutoRefresh.Checked || labelsActive || needFreeze))
             _refreshTimer.Start();
         else
             _refreshTimer.Stop();
@@ -922,12 +937,19 @@ public sealed class MainForm : Form
         _cmbScanFilter.SelectedIndex = 1;
         var btnNext = new Button { Text = "Siguiente escaneo", Left = 324, Top = 34, Width = 150 };
         btnNext.Click += (_, _) => _ = DoNextScanAsync();
-        var btnStop = new Button { Text = "Detener", Left = 480, Top = 34, Width = 80 };
+        var btnUnknown = new Button { Text = "Valor desconocido", Width = 140 };
+        btnUnknown.Click += (_, _) => _ = DoFirstScanUnknownAsync();
+        var btnStop = new Button { Text = "Detener", Width = 80 };
         btnStop.Click += (_, _) => _scanCts?.Cancel();
+        var btnWrite = new Button { Text = "Escribir valor", Width = 120 };
+        btnWrite.Click += (_, _) => WriteSelectedScan();
+        var btnFreeze = new Button { Text = "🔒 Congelar", Width = 110 };
+        btnFreeze.Click += (_, _) => ToggleFreezeSelected();
 
         bar.Controls.AddRange(new Control[]
         {
-            lblType, _cmbScanType, lblVal, _txtScanValue, btnFirst, lblF, _cmbScanFilter, btnNext, btnStop
+            lblType, _cmbScanType, lblVal, _txtScanValue, btnFirst, btnUnknown, lblF, _cmbScanFilter,
+            btnNext, btnStop, btnWrite, btnFreeze
         });
 
         _lvScan = new ThemedListView
@@ -936,7 +958,7 @@ public sealed class MainForm : Form
             View = View.Details,
             FullRowSelect = true,
             GridLines = true,
-            MultiSelect = false
+            MultiSelect = true
         };
         _lvScan.Columns.Add("Direccion", 170);
         _lvScan.Columns.Add("Valor", 140);
@@ -1171,8 +1193,16 @@ public sealed class MainForm : Form
         int pid = (int)_lvProcesses.SelectedItems[0].Tag!;
         string name = _lvProcesses.SelectedItems[0].SubItems[1].Text;
 
-        // Al cambiar de proceso, paramos el auto-refresco y cualquier escaneo.
+        // Al cambiar de proceso, paramos el auto-refresco, escaneos y modo edicion.
         _chkAutoRefresh.Checked = false;
+        if (_editMode)
+        {
+            _editMode = false;
+            _frozen.Clear();
+            _btnEdit.Text = "✏ Solo lectura";
+            _btnEdit.BackColor = ThemeManager.Current.SurfaceAlt;
+            _btnEdit.ForeColor = ThemeManager.Current.TextPrimary;
+        }
         _ptrCts?.Cancel();
         _stringsCts?.Cancel();
         _scanCts?.Cancel();
@@ -1798,6 +1828,131 @@ public sealed class MainForm : Form
         _txtSize.Text = "256";
         ReadHexAtAddress();
         ShowSection(_hexPage);
+    }
+
+    private async Task DoFirstScanUnknownAsync()
+    {
+        if (_reader == null) { _status.Text = "Abre un proceso primero."; return; }
+
+        var type = (ScanType)_cmbScanType.SelectedIndex;
+        _scanSession = new ScanSession(_reader, type);
+        _lvScan.Items.Clear();
+        _scanCts = new CancellationTokenSource();
+        var ct = _scanCts.Token;
+        var session = _scanSession;
+        var progress = new Progress<string>(m => _status.Text = m);
+        const int maxCandidates = 4_000_000;
+        try
+        {
+            await Task.Run(() => session.FirstScanUnknown(maxCandidates, progress, ct), ct);
+            RefreshScanList();
+            _status.Text = $"Instantanea de valor desconocido: {session.Count:N0} posiciones. " +
+                "Ahora refina con 'Cambio/Aumento/Disminuyo' + 'Siguiente escaneo'.";
+        }
+        catch (OperationCanceledException) { _status.Text = "Escaneo cancelado."; }
+        catch (Exception ex) { _status.Text = "Error: " + ex.Message; }
+        finally { _scanCts?.Dispose(); _scanCts = null; }
+    }
+
+    // ---------------- Modo edicion: escribir / congelar ----------------
+
+    private void ToggleEditMode()
+    {
+        if (_editMode)
+        {
+            _editMode = false;
+            _frozen.Clear();
+            _btnEdit.Text = "✏ Solo lectura";
+            ApplyThemeNow();
+            UpdateTimerState();
+            _status.Text = "Modo edicion desactivado (vuelve a solo lectura logica).";
+            return;
+        }
+
+        if (_reader == null) { _status.Text = "Abre un proceso primero."; return; }
+
+        var r = MessageBox.Show(
+            "El MODO EDICION reabre el proceso con permiso de ESCRITURA y deja de ser " +
+            "solo lectura. Usalo unicamente sobre procesos TUYOS o con autorizacion.\n\n" +
+            "¿Activar el modo edicion?",
+            "Activar modo edicion (escritura)",
+            MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+        if (r != DialogResult.Yes) return;
+
+        if (_reader.EnableWrite())
+        {
+            _editMode = true;
+            _btnEdit.Text = "✏ Edicion ON";
+            _btnEdit.BackColor = ThemeManager.Current.AccentRed;
+            _btnEdit.ForeColor = ThemeManager.Current.SelectionText;
+            _status.Text = "Modo edicion ACTIVADO. Ya puedes escribir y congelar valores.";
+        }
+        else
+        {
+            _status.Text = "No se pudo obtener acceso de escritura (proceso protegido o permisos).";
+        }
+    }
+
+    private byte[]? ParseScanValueBytes()
+    {
+        if (_scanSession == null) return null;
+        string kind = ((ScanType)_cmbScanType.SelectedIndex) switch
+        {
+            ScanType.Int32 => "Int32",
+            ScanType.Int64 => "Int64",
+            ScanType.Float => "Float",
+            ScanType.Double => "Double",
+            _ => "Int32",
+        };
+        try { return ValueInterpreter.BuildPattern(kind, _txtScanValue.Text).pattern; }
+        catch (Exception ex) { _status.Text = "Valor invalido: " + ex.Message; return null; }
+    }
+
+    private void WriteSelectedScan()
+    {
+        if (_reader == null) { _status.Text = "Abre un proceso primero."; return; }
+        if (!_editMode) { _status.Text = "Activa primero el modo edicion (boton de la cabecera)."; return; }
+        if (_lvScan.SelectedItems.Count == 0) { _status.Text = "Selecciona una o varias filas."; return; }
+        var bytes = ParseScanValueBytes();
+        if (bytes == null) return;
+
+        int ok = 0;
+        foreach (ListViewItem it in _lvScan.SelectedItems)
+        {
+            if (it.Tag is not ulong addr) continue;
+            try { _reader.WriteBytes(addr, bytes); ok++; it.SubItems[1].Text = _txtScanValue.Text.Trim(); }
+            catch (Exception ex) { _status.Text = "Error al escribir: " + ex.Message; }
+        }
+        if (ok > 0) _status.Text = $"Escrito el valor en {ok} direccion(es).";
+    }
+
+    private void ToggleFreezeSelected()
+    {
+        if (_reader == null) { _status.Text = "Abre un proceso primero."; return; }
+        if (!_editMode) { _status.Text = "Activa primero el modo edicion (boton de la cabecera)."; return; }
+        if (_lvScan.SelectedItems.Count == 0) { _status.Text = "Selecciona una o varias filas."; return; }
+
+        int size = _scanSession?.Size ?? 4;
+        foreach (ListViewItem it in _lvScan.SelectedItems)
+        {
+            if (it.Tag is not ulong addr) continue;
+            if (_frozen.IsFrozen(addr))
+            {
+                _frozen.Unfreeze(addr);
+                if (it.Text.StartsWith("🔒", StringComparison.Ordinal))
+                    it.Text = it.Text[1..].TrimStart();
+            }
+            else
+            {
+                byte[] cur;
+                try { cur = _reader.ReadBytes(addr, size); } catch { continue; }
+                _frozen.Freeze(addr, cur);
+                if (!it.Text.StartsWith("🔒", StringComparison.Ordinal))
+                    it.Text = "🔒 " + it.Text;
+            }
+        }
+        UpdateTimerState();
+        _status.Text = $"{_frozen.Count} valor(es) congelado(s).";
     }
 
     // ---------------- Entropia ----------------

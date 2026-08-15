@@ -14,6 +14,8 @@ internal static class NativeMethods
     public const uint PROCESS_QUERY_INFORMATION = 0x0400;
     public const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
     public const uint PROCESS_VM_READ = 0x0010;
+    public const uint PROCESS_VM_WRITE = 0x0020;
+    public const uint PROCESS_VM_OPERATION = 0x0008;
 
     // ---- Estado de las regiones de memoria (MEMORY_BASIC_INFORMATION.State) ----
     public const uint MEM_COMMIT = 0x1000;
@@ -72,6 +74,15 @@ internal static class NativeMethods
         byte[] lpBuffer,
         IntPtr nSize,
         out IntPtr lpNumberOfBytesRead);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool WriteProcessMemory(
+        IntPtr hProcess,
+        IntPtr lpBaseAddress,
+        byte[] lpBuffer,
+        IntPtr nSize,
+        out IntPtr lpNumberOfBytesWritten);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     public static extern IntPtr VirtualQueryEx(

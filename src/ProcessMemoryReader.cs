@@ -51,6 +51,9 @@ public sealed class ProcessMemoryReader : IDisposable
     public int ProcessId { get; }
     public bool IsOpen => _handle != IntPtr.Zero;
 
+    /// <summary>true si se ha activado el modo edicion (acceso de escritura).</summary>
+    public bool CanWrite { get; private set; }
+
     public ProcessMemoryReader(int pid)
     {
         ProcessId = pid;
@@ -103,6 +106,44 @@ public sealed class ProcessMemoryReader : IDisposable
             address = next;
         }
         return regions;
+    }
+
+    /// <summary>
+    /// Reabre el proceso con permiso de ESCRITURA (modo edicion). Por defecto la
+    /// herramienta es solo lectura; esto solo debe usarse sobre procesos propios.
+    /// Devuelve true si se consiguio el acceso de escritura.
+    /// </summary>
+    public bool EnableWrite()
+    {
+        EnsureOpen();
+        if (CanWrite) return true;
+        uint access = NativeMethods.PROCESS_QUERY_INFORMATION | NativeMethods.PROCESS_VM_READ |
+                      NativeMethods.PROCESS_VM_WRITE | NativeMethods.PROCESS_VM_OPERATION;
+        IntPtr h = NativeMethods.OpenProcess(access, false, ProcessId);
+        if (h == IntPtr.Zero) return false;
+        NativeMethods.CloseHandle(_handle);
+        _handle = h;
+        CanWrite = true;
+        return true;
+    }
+
+    /// <summary>Escribe bytes en el proceso (requiere modo edicion activado).</summary>
+    public void WriteBytes(ulong address, byte[] data)
+    {
+        EnsureOpen();
+        if (!CanWrite)
+            throw new InvalidOperationException("El modo edicion no esta activado.");
+        if (data.Length == 0) return;
+
+        bool ok = NativeMethods.WriteProcessMemory(
+            _handle, (IntPtr)address, data, (IntPtr)data.Length, out IntPtr written);
+        if (!ok || (int)written != data.Length)
+        {
+            int err = Marshal.GetLastWin32Error();
+            throw new Win32Exception(err,
+                $"No se pudo escribir en 0x{address:X}. Codigo Win32: {err} " +
+                "(pagina de solo lectura, protegida o inaccesible).");
+        }
     }
 
     /// <summary>Lee hasta <paramref name="size"/> bytes a partir de <paramref name="address"/>.</summary>
