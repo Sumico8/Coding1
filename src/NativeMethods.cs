@@ -138,6 +138,24 @@ internal static class NativeMethods
         IntPtr threadHandle, int threadInformationClass,
         ref ulong threadInformation, int threadInformationLength, out int returnLength);
 
+    // ThreadBasicInformation = 0 -> incluye TebBaseAddress (para localizar la pila).
+    [StructLayout(LayoutKind.Sequential)]
+    public struct THREAD_BASIC_INFORMATION
+    {
+        public int ExitStatus;
+        public IntPtr TebBaseAddress;
+        public IntPtr UniqueProcess;
+        public IntPtr UniqueThread;
+        public IntPtr AffinityMask;
+        public int Priority;
+        public int BasePriority;
+    }
+
+    [DllImport("ntdll.dll")]
+    public static extern int NtQueryInformationThread(
+        IntPtr threadHandle, int threadInformationClass,
+        ref THREAD_BASIC_INFORMATION threadInformation, int threadInformationLength, out int returnLength);
+
     /// <summary>Devuelve true si la proteccion de la pagina permite lectura.</summary>
     public static bool IsReadable(uint protect)
     {

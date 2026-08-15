@@ -136,12 +136,22 @@ public static class ThemeManager
 
             case Button btn:
                 btn.FlatStyle = FlatStyle.Flat;
-                btn.BackColor = t.SurfaceAlt;
                 btn.ForeColor = t.TextPrimary;
-                btn.FlatAppearance.BorderColor = t.Border;
-                btn.FlatAppearance.BorderSize = 1;
                 btn.FlatAppearance.MouseOverBackColor = t.Selection;
                 btn.FlatAppearance.MouseDownBackColor = t.AccentBlue;
+                if (btn.Tag as string == "nav")
+                {
+                    // Boton de la barra lateral: plano, sin borde. El activo lo
+                    // resalta ShowSection con el color de acento.
+                    btn.BackColor = t.SurfaceAlt;
+                    btn.FlatAppearance.BorderSize = 0;
+                }
+                else
+                {
+                    btn.BackColor = t.SurfaceAlt;
+                    btn.FlatAppearance.BorderColor = t.Border;
+                    btn.FlatAppearance.BorderSize = 1;
+                }
                 break;
 
             case CheckBox chk:

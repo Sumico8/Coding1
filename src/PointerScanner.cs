@@ -145,6 +145,9 @@ public sealed class PointerScanner
         var queue = new Queue<(ulong addr, List<long> offsetsRev)>();
         queue.Enqueue((target, new List<long>()));
 
+        // Evita reexpandir la misma direccion (ciclos/diamantes) y malgastar el tope.
+        var visited = new HashSet<ulong> { target };
+
         long expanded = 0;
         const long maxExpanded = 300_000;
 
@@ -169,7 +172,7 @@ public sealed class PointerScanner
                         mod.Value.mod.Name, mod.Value.mod.BaseAddress, (long)mod.Value.offset, newRev));
                     if (results.Count >= maxResults) return results;
                 }
-                else if (offsetsRev.Count + 1 < maxDepth)
+                else if (offsetsRev.Count + 1 < maxDepth && visited.Add(h.Address))
                 {
                     queue.Enqueue((h.Address, newRev));
                 }

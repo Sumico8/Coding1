@@ -17,8 +17,13 @@ public static class StringsExtractor
         var result = new List<FoundString>();
         if (minLen < 1) minLen = 1;
 
+        // Dedup por direccion (el solape entre trozos re-lee unos bytes).
+        var seenAscii = new HashSet<ulong>();
+        var seenUtf16 = new HashSet<ulong>();
+
         var regions = reader.EnumerateRegions(onlyReadable: true);
         const int chunk = 1 << 20;
+        const int overlap = 1024; // reensambla cadenas que cruzan el limite del trozo
         int idx = 0;
 
         foreach (var r in regions)
@@ -38,13 +43,18 @@ public static class StringsExtractor
                 catch { break; }
                 if (data.Length == 0) break;
 
-                ExtractAscii(data, pos, minLen, result, maxResults);
+                ExtractAscii(data, pos, minLen, result, maxResults, seenAscii);
                 if (result.Count >= maxResults) return result;
-                ExtractUtf16(data, pos, minLen, result, maxResults);
+                // UTF-16 en offsets pares e impares (subconjunto ASCII).
+                ExtractUtf16(data, pos, minLen, result, maxResults, seenUtf16, 0);
+                if (result.Count >= maxResults) return result;
+                ExtractUtf16(data, pos, minLen, result, maxResults, seenUtf16, 1);
                 if (result.Count >= maxResults) return result;
 
-                if (data.Length < want) break;
-                pos += (ulong)data.Length;
+                int own = data.Length - overlap;
+                bool last = data.Length < want || (pos + (ulong)data.Length) >= end || own <= 0;
+                if (last) break;
+                pos += (ulong)own;
             }
         }
         return result;
@@ -52,7 +62,7 @@ public static class StringsExtractor
 
     private static bool Printable(byte b) => b >= 0x20 && b < 0x7F;
 
-    private static void ExtractAscii(byte[] d, ulong bas, int minLen, List<FoundString> outp, int max)
+    private static void ExtractAscii(byte[] d, ulong bas, int minLen, List<FoundString> outp, int max, HashSet<ulong> seen)
     {
         int start = -1;
         for (int i = 0; i < d.Length; i++)
@@ -65,21 +75,29 @@ public static class StringsExtractor
             {
                 if (start >= 0 && i - start >= minLen)
                 {
-                    outp.Add(new FoundString(bas + (ulong)start, "ASCII", Ascii(d, start, i - start)));
-                    if (outp.Count >= max) return;
+                    ulong addr = bas + (ulong)start;
+                    if (seen.Add(addr))
+                    {
+                        outp.Add(new FoundString(addr, "ASCII", Ascii(d, start, i - start)));
+                        if (outp.Count >= max) return;
+                    }
                 }
                 start = -1;
             }
         }
         if (start >= 0 && d.Length - start >= minLen)
-            outp.Add(new FoundString(bas + (ulong)start, "ASCII", Ascii(d, start, d.Length - start)));
+        {
+            ulong addr = bas + (ulong)start;
+            if (seen.Add(addr))
+                outp.Add(new FoundString(addr, "ASCII", Ascii(d, start, d.Length - start)));
+        }
     }
 
-    private static void ExtractUtf16(byte[] d, ulong bas, int minLen, List<FoundString> outp, int max)
+    private static void ExtractUtf16(byte[] d, ulong bas, int minLen, List<FoundString> outp, int max, HashSet<ulong> seen, int startOffset)
     {
         // Secuencias de char imprimible (byte bajo) con byte alto 0 (UTF-16LE, subconjunto ASCII).
         int start = -1, count = 0;
-        for (int i = 0; i + 1 < d.Length; i += 2)
+        for (int i = startOffset; i + 1 < d.Length; i += 2)
         {
             bool printable = d[i + 1] == 0 && Printable(d[i]);
             if (printable)
@@ -91,14 +109,22 @@ public static class StringsExtractor
             {
                 if (start >= 0 && count >= minLen)
                 {
-                    outp.Add(new FoundString(bas + (ulong)start, "UTF-16", Utf16(d, start, count)));
-                    if (outp.Count >= max) return;
+                    ulong addr = bas + (ulong)start;
+                    if (seen.Add(addr))
+                    {
+                        outp.Add(new FoundString(addr, "UTF-16", Utf16(d, start, count)));
+                        if (outp.Count >= max) return;
+                    }
                 }
                 start = -1; count = 0;
             }
         }
         if (start >= 0 && count >= minLen)
-            outp.Add(new FoundString(bas + (ulong)start, "UTF-16", Utf16(d, start, count)));
+        {
+            ulong addr = bas + (ulong)start;
+            if (seen.Add(addr))
+                outp.Add(new FoundString(addr, "UTF-16", Utf16(d, start, count)));
+        }
     }
 
     private static string Ascii(byte[] d, int off, int len)

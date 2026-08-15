@@ -11,16 +11,16 @@ namespace MemReader;
 /// </summary>
 public sealed class MainForm : Form
 {
-    private readonly ListView _lvProcesses;
-    private readonly ListView _lvRegions;
+    private ListView _lvProcesses = null!;
+    private ListView _lvRegions = null!;
     private readonly ListView _lvResults;
-    private readonly TextBox _txtFilter;
+    private TextBox _txtFilter = null!;
     private readonly TextBox _txtAddress;
     private readonly TextBox _txtSize;
     private readonly TextBox _txtHex;
     private readonly TextBox _txtSearch;
-    private readonly CheckBox _chkOnlyReadable;
-    private readonly Label _lblProcess;
+    private CheckBox _chkOnlyReadable = null!;
+    private Label _lblProcess = null!;
     private readonly Label _lblAdmin;
     private readonly ToolStripStatusLabel _status;
     private readonly Button _btnSearch;
@@ -56,8 +56,14 @@ public sealed class MainForm : Form
     private List<MemoryRegion> _regions = new();
     private CancellationTokenSource? _searchCts;
 
-    // --- Interfaz nueva: tema, busqueda global y etiquetas/identificador ---
-    private TabControl _tabs = null!;
+    // --- Interfaz nueva: navegacion lateral, tema, busqueda e identificador ---
+    private Panel _content = null!;
+    private FlowLayoutPanel _sidebar = null!;
+    private TabPage _activePage = null!;
+    private TabPage _hexPage = null!;
+    private TabPage _procPage = null!;
+    private TabPage _regionsPage = null!;
+    private readonly Dictionary<TabPage, Button> _navButtons = new();
     private Button _btnTheme = null!;
     private TextBox _txtGlobalFind = null!;
     private readonly AnnotationStore _store = new();
@@ -67,121 +73,114 @@ public sealed class MainForm : Form
     private ContextMenuStrip _ctxLabel = null!;
     private readonly Dictionary<TabPage, ListViewFilter> _tabFilters = new();
     private ListViewFilter? _filterResults, _filterScan, _filterStrings, _filterPointers,
-        _filterSecurity, _filterThreads, _filterModules, _filterLabels;
+        _filterSecurity, _filterThreads, _filterModules, _filterLabels, _filterRegions;
 
     private static readonly Font Mono = new("Consolas", 9F);
 
     public MainForm()
     {
         Text = "MemReader - Lector de memoria de procesos (user-mode, solo lectura)";
-        Width = 1180;
-        Height = 760;
+        Width = 1240;
+        Height = 820;
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new Size(960, 600);
+        MinimumSize = new Size(1040, 660);
+        Font = new Font("Segoe UI", 9.75F);
 
-        // ---------- Barra superior ----------
-        var topBar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 44, WrapContents = false, Padding = new Padding(8, 8, 8, 4) };
-        var btnRefresh = new Button { Text = "Actualizar procesos", Width = 150, Margin = new Padding(0, 4, 8, 0) };
-        btnRefresh.Click += (_, _) => LoadProcesses();
+        // ---------- Cabecera ----------
+        var header = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top, Height = 54, ColumnCount = 4, RowCount = 1,
+            Padding = new Padding(12, 8, 12, 8),
+        };
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
-        var lblFilter = new Label { Text = "Procesos:", AutoSize = true, Margin = new Padding(0, 9, 3, 0), Tag = "hint" };
-        _txtFilter = new TextBox { Width = 160, Margin = new Padding(0, 6, 12, 0) };
-        _txtFilter.TextChanged += (_, _) => LoadProcesses();
+        var lblTitle = new Label
+        {
+            Text = "MemReader", AutoSize = true, Tag = "semantic",
+            Font = new Font("Segoe UI", 13F, FontStyle.Bold), Margin = new Padding(0, 6, 18, 0),
+        };
 
-        var lblFind = new Label { Text = "Buscar:", AutoSize = true, Margin = new Padding(0, 9, 3, 0), Tag = "hint" };
-        _txtGlobalFind = new TextBox { Width = 180, Margin = new Padding(0, 6, 12, 0) };
+        _lblProcess = new Label
+        {
+            Text = "Ningun proceso abierto.", AutoSize = true,
+            Font = new Font("Segoe UI", 9.75F, FontStyle.Bold), Margin = new Padding(0, 3, 8, 0),
+        };
+        _lblAdmin = new Label { AutoSize = true, Margin = new Padding(0, 2, 0, 0), ForeColor = Color.DarkRed, Tag = "semantic" };
+        var infoStack = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true,
+            Dock = DockStyle.Fill, Margin = new Padding(0),
+        };
+        infoStack.Controls.Add(_lblProcess);
+        infoStack.Controls.Add(_lblAdmin);
+
+        var findStack = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, WrapContents = false, AutoSize = true, Margin = new Padding(0) };
+        var lblFind = new Label { Text = "🔎", AutoSize = true, Margin = new Padding(0, 8, 4, 0), Tag = "hint" };
+        _txtGlobalFind = new TextBox { Width = 200, Margin = new Padding(0, 6, 12, 0) };
         _txtGlobalFind.TextChanged += (_, _) => OnGlobalFindChanged();
+        findStack.Controls.Add(lblFind);
+        findStack.Controls.Add(_txtGlobalFind);
 
-        _btnTheme = new Button { Text = ThemeManager.IsDark ? "☀ Claro" : "🌙 Oscuro", Width = 96, Margin = new Padding(0, 4, 12, 0) };
+        _btnTheme = new Button { Text = ThemeManager.IsDark ? "☀ Claro" : "🌙 Oscuro", Width = 104, Height = 30, Margin = new Padding(0, 5, 0, 0) };
         _btnTheme.Click += (_, _) => ThemeManager.Toggle();
 
-        _lblAdmin = new Label { AutoSize = true, Margin = new Padding(0, 9, 0, 0), ForeColor = Color.DarkRed, Tag = "semantic" };
+        header.Controls.Add(lblTitle, 0, 0);
+        header.Controls.Add(infoStack, 1, 0);
+        header.Controls.Add(findStack, 2, 0);
+        header.Controls.Add(_btnTheme, 3, 0);
 
-        topBar.Controls.AddRange(new Control[] { btnRefresh, lblFilter, _txtFilter, lblFind, _txtGlobalFind, _btnTheme, _lblAdmin });
+        // ---------- Contenido: todas las secciones alojadas en un panel ----------
+        _content = new Panel { Dock = DockStyle.Fill, Padding = new Padding(8) };
 
-        // ---------- Split principal (izquierda: procesos / derecha: analisis) ----------
-        var split1 = new SplitContainer { Dock = DockStyle.Fill, FixedPanel = FixedPanel.Panel1 };
+        _procPage = BuildProcessSection();
+        _hexPage = BuildHexTab();
+        var searchPage = BuildSearchTab(out _txtSearch, out _lvResults, out _btnSearch);
+        _regionsPage = BuildRegionsSection();
+        var modulesPage = BuildModulesTab();
+        var pointersPage = BuildPointersTab();
+        var scanPage = BuildScanTab();
+        var labelsPage = BuildLabelsTab();
+        var stringsPage = BuildStringsTab();
+        var securityPage = BuildSecurityTab();
+        var threadsPage = BuildThreadsTab();
+        var disasmPage = BuildDisasmTab();
 
-        // ----- Panel izquierdo: procesos -----
-        _lvProcesses = new ThemedListView
+        var sections = new (string label, TabPage page)[]
         {
-            Dock = DockStyle.Fill,
-            View = View.Details,
-            FullRowSelect = true,
-            GridLines = true,
-            MultiSelect = false,
-            HideSelection = false
+            ("👁   Procesos", _procPage),
+            ("🗺   Regiones", _regionsPage),
+            ("🔢   Visor hex", _hexPage),
+            ("🔎   Buscar", searchPage),
+            ("📈   Escaneo", scanPage),
+            ("📌   Punteros", pointersPage),
+            ("🏷   Etiquetas", labelsPage),
+            ("🔡   Strings", stringsPage),
+            ("🧩   Modulos", modulesPage),
+            ("🔐   Seguridad", securityPage),
+            ("🧠   Hilos", threadsPage),
+            ("⌨   Ensamblador", disasmPage),
         };
-        _lvProcesses.Columns.Add("PID", 70);
-        _lvProcesses.Columns.Add("Proceso", 230);
-        _lvProcesses.DoubleClick += (_, _) => AnalyzeSelectedProcess();
 
-        var btnAnalyze = new Button { Text = "Analizar proceso seleccionado", Dock = DockStyle.Bottom, Height = 34 };
-        btnAnalyze.Click += (_, _) => AnalyzeSelectedProcess();
-
-        var leftPanel = new Panel { Dock = DockStyle.Fill };
-        leftPanel.Controls.Add(_lvProcesses);
-        leftPanel.Controls.Add(btnAnalyze);
-        split1.Panel1.Controls.Add(leftPanel);
-
-        // ----- Panel derecho: regiones + visor/busqueda -----
-        var split2 = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal };
-
-        // Regiones (arriba)
-        _lblProcess = new Label { Dock = DockStyle.Top, Height = 24, Text = "Ningun proceso abierto.", Padding = new Padding(4, 4, 0, 0), Font = new Font("Segoe UI", 9F, FontStyle.Bold) };
-
-        var regionsBar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 38, WrapContents = true, Padding = new Padding(4, 4, 4, 4) };
-        _chkOnlyReadable = new CheckBox { Text = "Solo regiones legibles", Checked = true, Left = 4, Top = 6, Width = 170 };
-        _chkOnlyReadable.CheckedChanged += (_, _) => { if (_reader != null) EnumerateRegions(); };
-        var btnDump = new Button { Text = "Volcar region a archivo...", Left = 180, Top = 3, Width = 190 };
-        btnDump.Click += (_, _) => DumpSelectedRegion();
-        var btnDumpAll = new Button { Text = "Volcar TODO a carpeta...", Left = 376, Top = 3, Width = 200 };
-        btnDumpAll.Click += (_, _) => DumpAllRegions();
-        var btnMinidump = new Button { Text = "Minidump (.dmp)...", Left = 584, Top = 3, Width = 150 };
-        btnMinidump.Click += (_, _) => WriteMinidump();
-        var btnEntropy = new Button { Text = "Entropia", Left = 742, Top = 3, Width = 90 };
-        btnEntropy.Click += (_, _) => ComputeEntropy();
-        regionsBar.Controls.AddRange(new Control[] { _chkOnlyReadable, btnDump, btnDumpAll, btnMinidump, btnEntropy });
-
-        _lvRegions = new ThemedListView
+        // ---------- Navegacion lateral ----------
+        _sidebar = new FlowLayoutPanel
         {
-            Dock = DockStyle.Fill,
-            View = View.Details,
-            FullRowSelect = true,
-            GridLines = true,
-            MultiSelect = false,
-            HideSelection = false
+            Dock = DockStyle.Left, Width = 178, FlowDirection = FlowDirection.TopDown,
+            WrapContents = false, Padding = new Padding(6, 10, 6, 10), AutoScroll = true,
         };
-        _lvRegions.Columns.Add("Direccion base", 160);
-        _lvRegions.Columns.Add("Tamano", 90);
-        _lvRegions.Columns.Add("Proteccion", 90);
-        _lvRegions.Columns.Add("Tipo", 90);
-        _lvRegions.Columns.Add("Entropia", 80);
-        _lvRegions.SelectedIndexChanged += (_, _) => OnRegionSelected();
+        foreach (var (label, page) in sections)
+        {
+            page.Dock = DockStyle.Fill;
+            page.Visible = false;
+            _content.Controls.Add(page);
+            var btn = MakeNavButton(label, page);
+            _navButtons[page] = btn;
+            _sidebar.Controls.Add(btn);
+        }
 
-        var regionsHost = new Panel { Dock = DockStyle.Fill };
-        regionsHost.Controls.Add(_lvRegions);
-        regionsHost.Controls.Add(regionsBar);
-        regionsHost.Controls.Add(_lblProcess);
-        split2.Panel1.Controls.Add(regionsHost);
-
-        // Pestanas (abajo): visor hex + busqueda + modulos
-        _tabs = new ThemedTabControl { Dock = DockStyle.Fill };
-        _tabs.TabPages.Add(BuildHexTab());
-        _tabs.TabPages.Add(BuildSearchTab(out _txtSearch, out _lvResults, out _btnSearch));
-        _tabs.TabPages.Add(BuildModulesTab());
-        _tabs.TabPages.Add(BuildPointersTab());
-        _tabs.TabPages.Add(BuildScanTab());
-        _tabs.TabPages.Add(BuildLabelsTab());
-        _tabs.TabPages.Add(BuildStringsTab());
-        _tabs.TabPages.Add(BuildSecurityTab());
-        _tabs.TabPages.Add(BuildThreadsTab());
-        _tabs.TabPages.Add(BuildDisasmTab());
-        _tabs.SelectedIndexChanged += (_, _) => OnTabChanged();
-        split2.Panel2.Controls.Add(_tabs);
-
-        // El menu contextual "Etiquetar esta direccion..." es compartido por las
-        // listas de resultados; el ListView origen se guarda en su propio Tag.
+        // Menu contextual "Etiquetar esta direccion..." compartido por las listas.
         _ctxLabel = new ContextMenuStrip();
         var miLabel = new ToolStripMenuItem("Etiquetar esta direccion...");
         miLabel.Click += (_, _) => { if (_ctxLabel.SourceControl is ListView lv) EtiquetarFromContext(lv); };
@@ -189,44 +188,39 @@ public sealed class MainForm : Form
         foreach (var lv in new ListView[] { _lvResults, _lvScan, _lvPointers, _lvStrings })
             lv.ContextMenuStrip = _ctxLabel;
 
-        // Temporizador (1 s): auto-refresco del visor hex y de los valores en vivo
-        // de la pestana de etiquetas.
+        // Temporizador (1 s): auto-refresco del visor hex y valores en vivo de etiquetas.
         _refreshTimer = new System.Windows.Forms.Timer { Interval = 1000 };
         _refreshTimer.Tick += (_, _) =>
         {
             if (_reader == null) return;
             if (_chkAutoRefresh.Checked) ReadHexAtAddress();
-            if (_lvLabels != null && _tabs.SelectedTab == _lvLabels.Parent) RefreshLabelLiveValues();
+            if (_lvLabels != null && _activePage == _lvLabels.Parent) RefreshLabelLiveValues();
         };
-
-        split1.Panel2.Controls.Add(split2);
 
         // ---------- Barra de estado ----------
         var statusStrip = new StatusStrip();
         _status = new ToolStripStatusLabel { Text = "Listo." };
         statusStrip.Items.Add(_status);
 
-        // Los controles se agregan en orden: primero Fill, luego Top/Bottom.
-        Controls.Add(split1);
+        // Orden de anadido para el docking: Fill, luego Left, luego Bottom, luego Top.
+        Controls.Add(_content);
+        Controls.Add(_sidebar);
         Controls.Add(statusStrip);
-        Controls.Add(topBar);
+        Controls.Add(header);
 
-        // Campos que se inicializan en los builders de pestanas.
+        // Campos que se inicializan en los builders.
         _txtAddress = _hexAddress!;
         _txtSize = _hexSize!;
         _txtHex = _hexView!;
 
-        // Tema: aplicar ahora y re-aplicar en caliente al alternar.
         ApplyThemeNow();
         ThemeManager.ThemeChanged += OnThemeChanged;
         _store.Changed += (_, _) => RefreshLabelsList();
 
+        ShowSection(_procPage);
+
         Load += (_, _) =>
         {
-            // SplitterDistance se fija aqui, cuando los contenedores ya tienen
-            // su tamano final, para evitar excepciones al arrancar.
-            TrySetSplitter(split1, 340);
-            TrySetSplitter(split2, 260);
             ShowElevationState();
             LoadProcesses();
         };
@@ -244,6 +238,118 @@ public sealed class MainForm : Form
         };
     }
 
+    // ---------------- Navegacion lateral ----------------
+
+    private Button MakeNavButton(string text, TabPage page)
+    {
+        var btn = new Button
+        {
+            Text = text,
+            Width = 162,
+            Height = 36,
+            TextAlign = ContentAlignment.MiddleLeft,
+            FlatStyle = FlatStyle.Flat,
+            Margin = new Padding(2, 2, 2, 3),
+            Padding = new Padding(6, 0, 0, 0),
+            Tag = "nav",
+        };
+        btn.FlatAppearance.BorderSize = 0;
+        btn.Click += (_, _) => ShowSection(page);
+        return btn;
+    }
+
+    private void ShowSection(TabPage page)
+    {
+        if (page == null) return;
+        _activePage = page;
+        foreach (Control c in _content.Controls)
+            c.Visible = c == page;
+        page.BringToFront();
+
+        var t = ThemeManager.Current;
+        foreach (var kv in _navButtons)
+        {
+            bool active = kv.Key == page;
+            kv.Value.BackColor = active ? t.AccentBlue : t.Surface;
+            kv.Value.ForeColor = active ? t.SelectionText : t.TextPrimary;
+        }
+
+        if (_tabFilters.TryGetValue(page, out var f)) f.Apply(_txtGlobalFind.Text);
+        UpdateTimerState();
+    }
+
+    private TabPage BuildProcessSection()
+    {
+        var page = new TabPage("Procesos");
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, WrapContents = true, Padding = new Padding(6, 4, 6, 4) };
+        var btnRefresh = new Button { Text = "Actualizar", Width = 110, Margin = new Padding(0, 4, 6, 0) };
+        btnRefresh.Click += (_, _) => LoadProcesses();
+        var lblFilter = new Label { Text = "Filtrar:", AutoSize = true, Margin = new Padding(6, 8, 3, 0), Tag = "hint" };
+        _txtFilter = new TextBox { Width = 220, Margin = new Padding(0, 5, 0, 0) };
+        _txtFilter.TextChanged += (_, _) => LoadProcesses();
+        bar.Controls.AddRange(new Control[] { btnRefresh, lblFilter, _txtFilter });
+
+        _lvProcesses = new ThemedListView
+        {
+            Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true,
+            GridLines = true, MultiSelect = false, HideSelection = false,
+        };
+        _lvProcesses.Columns.Add("PID", 80);
+        _lvProcesses.Columns.Add("Proceso", 300);
+        _lvProcesses.DoubleClick += (_, _) => AnalyzeSelectedProcess();
+
+        var btnAnalyze = new Button { Text = "Analizar proceso seleccionado", Dock = DockStyle.Bottom, Height = 38 };
+        btnAnalyze.Click += (_, _) => AnalyzeSelectedProcess();
+
+        var hint = new Label
+        {
+            Dock = DockStyle.Bottom, Height = 22,
+            Text = "Doble clic o 'Analizar' para abrir el proceso.",
+            ForeColor = Color.Gray, Tag = "hint", Padding = new Padding(4, 2, 0, 0),
+        };
+
+        page.Controls.Add(_lvProcesses);
+        page.Controls.Add(hint);
+        page.Controls.Add(btnAnalyze);
+        page.Controls.Add(bar);
+        return page;
+    }
+
+    private TabPage BuildRegionsSection()
+    {
+        var page = new TabPage("Regiones");
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, WrapContents = true, Padding = new Padding(4, 4, 4, 4) };
+        _chkOnlyReadable = new CheckBox { Text = "Solo legibles", Checked = true, AutoSize = true, Margin = new Padding(4, 8, 10, 0) };
+        _chkOnlyReadable.CheckedChanged += (_, _) => { if (_reader != null) EnumerateRegions(); };
+        var btnDump = new Button { Text = "Volcar region...", Width = 140, Margin = new Padding(0, 4, 4, 0) };
+        btnDump.Click += (_, _) => DumpSelectedRegion();
+        var btnDumpAll = new Button { Text = "Volcar TODO...", Width = 140, Margin = new Padding(0, 4, 4, 0) };
+        btnDumpAll.Click += (_, _) => DumpAllRegions();
+        var btnMinidump = new Button { Text = "Minidump...", Width = 120, Margin = new Padding(0, 4, 4, 0) };
+        btnMinidump.Click += (_, _) => WriteMinidump();
+        var btnEntropy = new Button { Text = "Entropia", Width = 90, Margin = new Padding(0, 4, 4, 0) };
+        btnEntropy.Click += (_, _) => ComputeEntropy();
+        bar.Controls.AddRange(new Control[] { _chkOnlyReadable, btnDump, btnDumpAll, btnMinidump, btnEntropy });
+
+        _lvRegions = new ThemedListView
+        {
+            Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true,
+            GridLines = true, MultiSelect = false, HideSelection = false,
+        };
+        _lvRegions.Columns.Add("Direccion base", 150);
+        _lvRegions.Columns.Add("Tamano", 90);
+        _lvRegions.Columns.Add("Proteccion", 85);
+        _lvRegions.Columns.Add("Tipo", 85);
+        _lvRegions.Columns.Add("Entropia", 70);
+        _lvRegions.Columns.Add("Que es", 240);
+        _lvRegions.SelectedIndexChanged += (_, _) => OnRegionSelected();
+        _filterRegions = AddFilter(bar, _lvRegions, page);
+
+        page.Controls.Add(_lvRegions);
+        page.Controls.Add(bar);
+        return page;
+    }
+
     // ---------------- Tema ----------------
 
     private void OnThemeChanged(object? sender, EventArgs e) => ApplyThemeNow();
@@ -251,6 +357,7 @@ public sealed class MainForm : Form
     private void ApplyThemeNow()
     {
         ThemeManager.Apply(this);
+        if (_sidebar != null) _sidebar.BackColor = ThemeManager.Current.Background;
         if (_ctxLabel != null)
         {
             _ctxLabel.BackColor = ThemeManager.Current.Surface;
@@ -259,6 +366,7 @@ public sealed class MainForm : Form
         if (_btnTheme != null)
             _btnTheme.Text = ThemeManager.IsDark ? "☀ Claro" : "🌙 Oscuro";
         ReapplySemanticColors();
+        if (_activePage != null) ShowSection(_activePage); // re-resalta el boton activo
         Invalidate(true);
     }
 
@@ -314,21 +422,13 @@ public sealed class MainForm : Form
 
     private void OnGlobalFindChanged()
     {
-        if (_tabs.SelectedTab != null && _tabFilters.TryGetValue(_tabs.SelectedTab, out var f))
+        if (_activePage != null && _tabFilters.TryGetValue(_activePage, out var f))
             f.Apply(_txtGlobalFind.Text);
-    }
-
-    private void OnTabChanged()
-    {
-        // La busqueda global sigue a la pestana activa.
-        if (_tabs.SelectedTab != null && _tabFilters.TryGetValue(_tabs.SelectedTab, out var f))
-            f.Apply(_txtGlobalFind.Text);
-        UpdateTimerState();
     }
 
     private void UpdateTimerState()
     {
-        bool labelsActive = _lvLabels != null && _tabs.SelectedTab == _lvLabels.Parent;
+        bool labelsActive = _lvLabels != null && _activePage == _lvLabels.Parent;
         if (_reader != null && (_chkAutoRefresh.Checked || labelsActive))
             _refreshTimer.Start();
         else
@@ -394,6 +494,7 @@ public sealed class MainForm : Form
     private void RefreshLabelsList()
     {
         if (_lvLabels == null) return;
+        _identifier?.RefreshLabelIndex(); // para que la columna "Que es" incluya etiquetas
         var t = ThemeManager.Current;
         List<ModuleInfo>? modules = _identifier?.CurrentModules();
         _lvLabels.BeginUpdate();
@@ -531,8 +632,19 @@ public sealed class MainForm : Form
         _txtAddress.Text = "0x" + addr.Value.ToString("X");
         _txtSize.Text = "256";
         ReadHexAtAddress();
-        if (_txtHex.Parent is TabPage page && page.Parent is TabControl tc)
-            tc.SelectedTab = page;
+        ShowSection(_hexPage);
+    }
+
+    private Color WhatIsColor(AddrCategory c)
+    {
+        var t = ThemeManager.Current;
+        return c switch
+        {
+            AddrCategory.Modulo or AddrCategory.Imagen => t.ModuleColor,
+            AddrCategory.Pila => t.AccentPurple,
+            AddrCategory.Mapeado => t.AccentAmber,
+            _ => t.TextPrimary,
+        };
     }
 
     private void UpdateIdentityPanel(ulong address)
@@ -678,9 +790,10 @@ public sealed class MainForm : Form
             GridLines = true,
             MultiSelect = false
         };
-        lvResults.Columns.Add("Direccion", 170);
-        lvResults.Columns.Add("Tipo", 110);
-        lvResults.Columns.Add("Valor", 400);
+        lvResults.Columns.Add("Direccion", 160);
+        lvResults.Columns.Add("Tipo", 90);
+        lvResults.Columns.Add("Valor", 240);
+        lvResults.Columns.Add("Que es", 260);
         var localResults = lvResults;
         lvResults.DoubleClick += (_, _) => JumpToResult(localResults);
         _filterResults = AddFilter(bar, lvResults, page);
@@ -825,9 +938,9 @@ public sealed class MainForm : Form
             GridLines = true,
             MultiSelect = false
         };
-        _lvScan.Columns.Add("Direccion", 180);
-        _lvScan.Columns.Add("Valor", 160);
-        _lvScan.Columns.Add("Base / modulo", 260);
+        _lvScan.Columns.Add("Direccion", 170);
+        _lvScan.Columns.Add("Valor", 140);
+        _lvScan.Columns.Add("Que es", 320);
         _lvScan.DoubleClick += (_, _) => JumpFromScan();
         _filterScan = AddFilter(bar, _lvScan, page);
 
@@ -983,9 +1096,10 @@ public sealed class MainForm : Form
             GridLines = true,
             MultiSelect = false
         };
-        _lvStrings.Columns.Add("Direccion", 160);
-        _lvStrings.Columns.Add("Cod.", 70);
-        _lvStrings.Columns.Add("Texto", 620);
+        _lvStrings.Columns.Add("Direccion", 150);
+        _lvStrings.Columns.Add("Cod.", 60);
+        _lvStrings.Columns.Add("Texto", 420);
+        _lvStrings.Columns.Add("Que es", 220);
         _lvStrings.DoubleClick += (_, _) => JumpToString();
         _filterStrings = AddFilter(bar, _lvStrings, page);
 
@@ -1069,18 +1183,20 @@ public sealed class MainForm : Form
             _reader?.Dispose();
             _reader = new ProcessMemoryReader(pid);
             _scanner = new PointerScanner(_reader);
+            // El identificador (con su clasificador de memoria) se crea antes de
+            // enumerar regiones para poder rellenar la columna "Que es".
+            _identifier = new Identifier(_scanner, _reader, _store);
 
             string arch = _reader.IsTargetWow64() ? "x86 (WOW64)" : "x64";
             string? path = _reader.GetProcessPath();
-            _lblProcess.Text = $"Proceso: {name} (PID {pid})  |  {arch}"
-                + (string.IsNullOrEmpty(path) ? "" : $"  |  {path}");
+            _lblProcess.Text = $"{name} · PID {pid} · {arch}"
+                + (string.IsNullOrEmpty(path) ? "" : $" · {path}");
 
             EnumerateRegions();
             LoadModules();
 
-            // Identificador + tabla de etiquetas de este proceso (por nombre).
-            _identifier = new Identifier(_scanner!, _reader, _store);
-            _store.LoadForProcess(name); // dispara RefreshLabelsList via Changed
+            // Tabla de etiquetas de este proceso (por nombre) -> RefreshLabelsList.
+            _store.LoadForProcess(name);
 
             _txtHex.Text = string.Empty;
             _txtInterp.Text = string.Empty;
@@ -1093,6 +1209,7 @@ public sealed class MainForm : Form
             _lvThreads.Items.Clear();
             _scanSession = null;
             UpdateTimerState();
+            ShowSection(_regionsPage); // ir directo a las regiones del proceso abierto
         }
         catch (Win32Exception ex)
         {
@@ -1132,6 +1249,7 @@ public sealed class MainForm : Form
                 item.SubItems.Add(r.ProtectText);
                 item.SubItems.Add(r.TypeText);
                 item.SubItems.Add(""); // entropia (se rellena bajo demanda)
+                item.SubItems.Add(_identifier?.WhatIs(r.BaseAddress).Text ?? "");
                 _lvRegions.Items.Add(item);
             }
             ulong totalBytes = 0;
@@ -1145,6 +1263,7 @@ public sealed class MainForm : Form
         finally
         {
             _lvRegions.EndUpdate();
+            _filterRegions?.Reset();
         }
     }
 
@@ -1268,6 +1387,9 @@ public sealed class MainForm : Form
                 var item = new ListViewItem("0x" + h.Address.ToString("X")) { Tag = h.Address };
                 item.SubItems.Add(h.Encoding);
                 item.SubItems.Add(h.Preview);
+                var w = _identifier?.WhatIs(h.Address);
+                item.SubItems.Add(w?.Text ?? "");
+                if (w is { } wi) item.ForeColor = WhatIsColor(wi.Category);
                 _lvResults.Items.Add(item);
             }
             _lvResults.EndUpdate();
@@ -1303,8 +1425,7 @@ public sealed class MainForm : Form
         ReadHexAtAddress();
 
         // Cambiar a la pestana del visor.
-        if (_txtHex.Parent is TabPage page && page.Parent is TabControl tc)
-            tc.SelectedTab = page;
+        ShowSection(_hexPage);
     }
 
     // ---------------- Volcado ----------------
@@ -1372,8 +1493,7 @@ public sealed class MainForm : Form
         _txtAddress.Text = "0x" + baseAddr.ToString("X");
         _txtSize.Text = "512";
         ReadHexAtAddress();
-        if (_txtHex.Parent is TabPage page && page.Parent is TabControl tc)
-            tc.SelectedTab = page;
+        ShowSection(_hexPage);
     }
 
     // ---------------- Copiar / exportar ----------------
@@ -1597,8 +1717,7 @@ public sealed class MainForm : Form
         _txtAddress.Text = "0x" + finalAddr.ToString("X");
         _txtSize.Text = "256";
         ReadHexAtAddress();
-        if (_txtHex.Parent is TabPage page && page.Parent is TabControl tc)
-            tc.SelectedTab = page;
+        ShowSection(_hexPage);
     }
 
     // ---------------- Escaneo iterativo ----------------
@@ -1660,8 +1779,9 @@ public sealed class MainForm : Form
             if (shown++ >= 5000) break;
             var it = new ListViewItem("0x" + addr.ToString("X")) { Tag = addr };
             it.SubItems.Add(_scanSession.FormatValue(value));
-            var mod = _scanner?.ResolveModuleOffset(addr);
-            it.SubItems.Add(mod != null ? $"{mod.Value.mod.Name}+0x{mod.Value.offset:X}" : "(dinamica)");
+            var w = _identifier?.WhatIs(addr, value);
+            it.SubItems.Add(w?.Text ?? "");
+            if (w is { } wi) it.ForeColor = WhatIsColor(wi.Category);
             _lvScan.Items.Add(it);
         }
         _lvScan.EndUpdate();
@@ -1677,8 +1797,7 @@ public sealed class MainForm : Form
         _txtAddress.Text = hex;
         _txtSize.Text = "256";
         ReadHexAtAddress();
-        if (_txtHex.Parent is TabPage page && page.Parent is TabControl tc)
-            tc.SelectedTab = page;
+        ShowSection(_hexPage);
     }
 
     // ---------------- Entropia ----------------
@@ -1750,8 +1869,7 @@ public sealed class MainForm : Form
         _txtAddress.Text = "0x" + addr.ToString("X");
         _txtSize.Text = "256";
         ReadHexAtAddress();
-        if (_txtHex.Parent is TabPage page && page.Parent is TabControl tc)
-            tc.SelectedTab = page;
+        ShowSection(_hexPage);
     }
 
     // ---------------- Desensamblado ----------------
@@ -1818,8 +1936,7 @@ public sealed class MainForm : Form
         _txtAddress.Text = "0x" + addr.ToString("X");
         _txtSize.Text = "256";
         ReadHexAtAddress();
-        if (_txtHex.Parent is TabPage page && page.Parent is TabControl tc)
-            tc.SelectedTab = page;
+        ShowSection(_hexPage);
     }
 
     private void ExportSecurityCsv()
@@ -1871,6 +1988,7 @@ public sealed class MainForm : Form
                 var it = new ListViewItem("0x" + s.Address.ToString("X")) { Tag = s.Address };
                 it.SubItems.Add(s.Encoding);
                 it.SubItems.Add(s.Text.Length > 400 ? s.Text[..400] : s.Text);
+                it.SubItems.Add(_identifier?.WhatIs(s.Address).Text ?? "");
                 _lvStrings.Items.Add(it);
             }
             _lvStrings.EndUpdate();
@@ -1891,8 +2009,7 @@ public sealed class MainForm : Form
         _txtAddress.Text = "0x" + addr.ToString("X");
         _txtSize.Text = "256";
         ReadHexAtAddress();
-        if (_txtHex.Parent is TabPage page && page.Parent is TabControl tc)
-            tc.SelectedTab = page;
+        ShowSection(_hexPage);
     }
 
     private void ExportStringsCsv()
@@ -1971,18 +2088,6 @@ public sealed class MainForm : Form
             _lblAdmin.ForeColor = ThemeManager.Current.BadText;
             _lblAdmin.Text = "SIN privilegios de Administrador: la mayoria de procesos no se podran abrir.";
         }
-    }
-
-    private static void TrySetSplitter(SplitContainer split, int distance)
-    {
-        try
-        {
-            int extent = split.Orientation == Orientation.Vertical ? split.Width : split.Height;
-            int max = extent - split.Panel2MinSize - split.SplitterWidth;
-            if (max > split.Panel1MinSize)
-                split.SplitterDistance = Math.Clamp(distance, split.Panel1MinSize, max);
-        }
-        catch { /* si el tamano aun no permite fijarlo, se queda con el valor por defecto */ }
     }
 
     private static bool TryParseAddress(string text, out ulong address)

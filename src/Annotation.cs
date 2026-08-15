@@ -209,12 +209,16 @@ public sealed record IdentifyResult(
 /// donde vive (protección/tipo, estatica vs dinamica), que etiquetas guardadas
 /// coinciden (re-resolviendolas en vivo) y una conjetura del tipo de dato.
 /// </summary>
+public readonly record struct WhatIsResult(string Text, AddrCategory Category);
+
 public sealed class Identifier
 {
     private readonly PointerScanner _scanner;
     private readonly ProcessMemoryReader _reader;
     private readonly AnnotationStore _store;
     private readonly int _ptrSize;
+    private readonly MemoryClassifier _classifier;
+    private Dictionary<ulong, Annotation>? _labelIndex;
 
     private const long MatchWindow = 0x400; // ventana de "cercania"
 
@@ -224,6 +228,53 @@ public sealed class Identifier
         _reader = reader;
         _store = store;
         _ptrSize = reader.IsTargetWow64() ? 4 : 8;
+        _classifier = new MemoryClassifier(reader, scanner);
+    }
+
+    /// <summary>Resuelve una vez todas las etiquetas a direcciones, para casar filas
+    /// sin coste por fila. Llamar antes de rellenar una lista grande.</summary>
+    public void RefreshLabelIndex()
+    {
+        var map = new Dictionary<ulong, Annotation>();
+        var modules = _reader.EnumerateModules();
+        foreach (var a in _store.Items)
+        {
+            var addr = Resolve(a, modules);
+            if (addr != null) map[addr.Value] = a;
+        }
+        _labelIndex = map;
+    }
+
+    /// <summary>Identificacion rapida "de que es" para la columna de las listas:
+    /// clasificacion estructural + tipo de dato + etiqueta si existe. Sin I/O salvo
+    /// la conjetura de tipo (que usa los bytes ya leidos si se pasan).</summary>
+    public WhatIsResult WhatIs(ulong addr, byte[]? valueBytes = null)
+    {
+        var c = _classifier.Classify(addr);
+        var sb = new StringBuilder(c.Text);
+
+        if (valueBytes is { Length: > 0 })
+        {
+            string ty = GuessTypeShort(valueBytes);
+            if (ty.Length > 0) sb.Append(" · ").Append(ty);
+        }
+        if (_labelIndex != null && _labelIndex.TryGetValue(addr, out var lab))
+            sb.Append($" · «{lab.Name}» [{lab.Category}]");
+
+        return new WhatIsResult(sb.ToString(), c.Category);
+    }
+
+    private string GuessTypeShort(byte[] d)
+    {
+        if (d.Length >= _ptrSize)
+        {
+            ulong v = _ptrSize == 8 ? BitConverter.ToUInt64(d, 0) : BitConverter.ToUInt32(d, 0);
+            var mo = _scanner.ResolveModuleOffset(v);
+            if (mo != null) return $"puntero→{mo.Value.mod.Name}+0x{mo.Value.offset:X}";
+        }
+        string ascii = PrintableAscii(d, 8);
+        if (ascii.Length >= 4) return "texto";
+        return "";
     }
 
     public List<ModuleInfo> CurrentModules() => _reader.EnumerateModules();

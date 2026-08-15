@@ -41,10 +41,18 @@ de escritorio (WinForms, .NET 8) que:
   (con índice) para análisis forense en tu laboratorio.
 - **Export a minidump `.dmp`** (memoria completa) compatible con WinDbg — la misma
   capacidad que "Crear archivo de volcado" del Administrador de tareas.
-- **Interfaz con temas claro/oscuro**: diseño limpio con acentos de color semánticos
-  (verde = legible/OK, rojo = RWX/peligro, azul = módulos/estático, ámbar = aviso).
-  Botón **🌙/☀** en la barra superior para alternar en caliente; recuerda tu
-  preferencia entre sesiones.
+- **Interfaz con navegación lateral y temas claro/oscuro**: barra lateral con iconos
+  para moverte entre secciones (Procesos, Regiones, Visor, Buscar, Escaneo, Punteros,
+  Etiquetas, Strings, Módulos, Seguridad, Hilos, Ensamblador), cabecera con el proceso
+  activo y acentos de color semánticos (verde = legible/OK, rojo = RWX/peligro,
+  azul = módulos/estático, ámbar = aviso). Botón **🌙/☀** para alternar el tema en
+  caliente; recuerda tu preferencia entre sesiones.
+- **Identificación automática ("Qué es")**: nada más seleccionar el proceso, cada lista
+  (Regiones, Buscar, Escaneo, Strings) muestra una columna **Qué es** que clasifica
+  **cada dirección** sin que hagas nada: `game.exe+offset` (código de un módulo),
+  `montón / datos privados`, `pila (hilo N)`, `mapeado (archivo)`, más el tipo de dato
+  (`puntero → módulo+offset`, `texto`, `número`). Si además pusiste una etiqueta, se
+  muestra su nombre y categoría.
 - **Búsqueda rápida en cada lista**: caja de **Filtrar** en cada pestaña de
   resultados y un buscador **global** en la cabecera para encontrar cualquier fila
   al instante (por dirección, valor, módulo, texto…).

@@ -192,16 +192,22 @@ public sealed class ProcessMemoryReader : IDisposable
 
                 if (data.Length == 0) break;
 
+                // Ultimo trozo de la region si se leyo parcial, si cubre el final,
+                // o si no hay margen para un solape con el siguiente trozo.
+                int own = data.Length - overlap;
+                bool lastChunk = data.Length < want || (pos + (ulong)data.Length) >= end || own <= 0;
+                // Solo reportamos coincidencias cuyo inicio cae en la parte "propia"
+                // del trozo; el solape lo cubre el siguiente (evita duplicados en la costura).
+                int reportLimit = lastChunk ? data.Length : own;
+
                 foreach (var p in active)
                 {
-                    FindAll(data, p.pattern, pos, p.label, p.preview, hits, maxHits);
+                    FindAll(data, p.pattern, pos, p.label, p.preview, hits, maxHits, reportLimit);
                     if (hits.Count >= maxHits) return hits;
                 }
 
-                if (data.Length < want) break; // No se leyo todo: fin de la region util.
-
-                ulong advance = (ulong)Math.Max(1, data.Length - overlap);
-                pos += advance;
+                if (lastChunk) break; // Region cubierta; no avanzamos byte a byte.
+                pos += (ulong)own;
             }
         }
         return hits;
@@ -306,7 +312,7 @@ public sealed class ProcessMemoryReader : IDisposable
 
     private static void FindAll(
         byte[] haystack, byte[] needle, ulong baseAddr,
-        string encoding, string preview, List<SearchHit> hits, int maxHits)
+        string encoding, string preview, List<SearchHit> hits, int maxHits, int reportLimit)
     {
         if (needle.Length == 0) return;
         int i = 0;
@@ -314,6 +320,8 @@ public sealed class ProcessMemoryReader : IDisposable
         {
             int found = IndexOf(haystack, needle, i);
             if (found < 0) break;
+            // Coincidencias a partir de reportLimit las reporta el siguiente trozo.
+            if (found >= reportLimit) break;
             hits.Add(new SearchHit(baseAddr + (ulong)found, encoding, preview));
             if (hits.Count >= maxHits) return;
             i = found + needle.Length;

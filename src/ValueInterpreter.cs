@@ -79,16 +79,17 @@ public static class ValueInterpreter
     public static (byte[] pattern, string label, string preview) BuildPattern(string kind, string text)
     {
         text = text.Trim();
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
         switch (kind)
         {
             case "Int32":
-                return (BitConverter.GetBytes(int.Parse(text)), "Int32", text);
+                return (BitConverter.GetBytes(int.Parse(text, inv)), "Int32", text);
             case "Int64":
-                return (BitConverter.GetBytes(long.Parse(text)), "Int64", text);
+                return (BitConverter.GetBytes(long.Parse(text, inv)), "Int64", text);
             case "Float":
-                return (BitConverter.GetBytes(float.Parse(text, System.Globalization.CultureInfo.InvariantCulture)), "Float", text);
+                return (BitConverter.GetBytes(float.Parse(text, inv)), "Float", text);
             case "Double":
-                return (BitConverter.GetBytes(double.Parse(text, System.Globalization.CultureInfo.InvariantCulture)), "Double", text);
+                return (BitConverter.GetBytes(double.Parse(text, inv)), "Double", text);
             case "Bytes hex":
                 return (ParseHexBytes(text), "Bytes", text);
             default:
@@ -99,23 +100,34 @@ public static class ValueInterpreter
     private static byte[] ParseHexBytes(string text)
     {
         // Acepta "DE AD BE EF", "DEADBEEF" o "0xDE,0xAD".
-        var clean = text.Replace("0x", "", StringComparison.OrdinalIgnoreCase)
-                        .Replace(",", " ")
-                        .Replace("-", " ");
-        var parts = clean.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var parts = text.Replace(",", " ").Replace("-", " ")
+                        .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+        static string StripPrefix(string s) =>
+            s.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? s[2..] : s;
 
         var bytes = new List<byte>();
-        if (parts.Length == 1 && parts[0].Length % 2 == 0)
+        try
         {
-            // Cadena hex continua sin separadores.
-            string s = parts[0];
-            for (int i = 0; i < s.Length; i += 2)
-                bytes.Add(Convert.ToByte(s.Substring(i, 2), 16));
+            if (parts.Length == 1)
+            {
+                // Cadena hex continua sin separadores.
+                string s = StripPrefix(parts[0]);
+                if (s.Length == 0 || s.Length % 2 != 0)
+                    throw new ArgumentException(
+                        "La cadena hex debe tener un numero par de digitos (p.ej. DEADBEEF).");
+                for (int i = 0; i < s.Length; i += 2)
+                    bytes.Add(Convert.ToByte(s.Substring(i, 2), 16));
+            }
+            else
+            {
+                foreach (var p in parts)
+                    bytes.Add(Convert.ToByte(StripPrefix(p), 16));
+            }
         }
-        else
+        catch (Exception ex) when (ex is FormatException or OverflowException)
         {
-            foreach (var p in parts)
-                bytes.Add(Convert.ToByte(p, 16));
+            throw new ArgumentException("Bytes hex invalidos: " + ex.Message);
         }
 
         if (bytes.Count == 0) throw new ArgumentException("No hay bytes hex validos.");
