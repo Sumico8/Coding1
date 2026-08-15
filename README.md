@@ -15,6 +15,11 @@ de escritorio (WinForms, .NET 8) que:
   float, double, puntero y cadena.
 - **Búsqueda tipada**: por texto (ASCII y UTF-16), o por valor **Int32 / Int64 /
   Float / Double / bytes hex**. Útil para encontrar dónde vive un valor en *tu* app.
+- **Punteros y offsets** (reversing): dada una dirección objetivo, encuentra qué la
+  apunta (1 nivel) y **rutas de puntero estáticas** `modulo+offset -> +off -> ...`
+  multinivel, ancladas a un módulo. Doble clic **resuelve la ruta en vivo** y salta
+  a la dirección final — para reencontrar un valor aunque la app se reinicie. Todo
+  cálculo, sin modificar memoria.
 - **Auto-refresco (1 s)** del visor para vigilar cómo cambia un valor en vivo.
 - **Copiar / exportar** el volcado (texto) y los resultados de búsqueda (CSV).
 - **Vuelca** una región a `.bin`, o **todas** las regiones legibles a una carpeta
@@ -144,6 +149,7 @@ app.manifest                  Solicita elevación (Administrador) + DPI
 src/NativeMethods.cs          P/Invoke a kernel32 (APIs documentadas)
 src/Privileges.cs             Habilita SeDebugPrivilege (advapi32)
 src/ProcessMemoryReader.cs    Núcleo: abrir proceso, enumerar, leer, módulos, dump
+src/PointerScanner.cs         Motor de punteros/offsets (índice, escaneo, resolución)
 src/ValueInterpreter.cs       Interpreta bytes como tipos y construye patrones
 src/HexFormatter.cs           Volcado hexadecimal
 src/MainForm.cs               Interfaz gráfica

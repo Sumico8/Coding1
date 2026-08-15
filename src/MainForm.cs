@@ -29,6 +29,12 @@ public sealed class MainForm : Form
     private TextBox _txtInterp = null!;
     private CheckBox _chkAutoRefresh = null!;
     private ListView _lvModules = null!;
+    private ListView _lvPointers = null!;
+    private TextBox _ptrTarget = null!;
+    private TextBox _ptrDepth = null!;
+    private TextBox _ptrMaxOff = null!;
+    private PointerScanner? _scanner;
+    private CancellationTokenSource? _ptrCts;
     private readonly System.Windows.Forms.Timer _refreshTimer;
 
     private ProcessMemoryReader? _reader;
@@ -124,6 +130,7 @@ public sealed class MainForm : Form
         tabs.TabPages.Add(BuildHexTab());
         tabs.TabPages.Add(BuildSearchTab(out _txtSearch, out _lvResults, out _btnSearch));
         tabs.TabPages.Add(BuildModulesTab());
+        tabs.TabPages.Add(BuildPointersTab());
         split2.Panel2.Controls.Add(tabs);
 
         // Temporizador para el auto-refresco del visor hexadecimal.
@@ -156,7 +163,13 @@ public sealed class MainForm : Form
             ShowElevationState();
             LoadProcesses();
         };
-        FormClosing += (_, _) => { _refreshTimer.Stop(); _searchCts?.Cancel(); _reader?.Dispose(); };
+        FormClosing += (_, _) =>
+        {
+            _refreshTimer.Stop();
+            _searchCts?.Cancel();
+            _ptrCts?.Cancel();
+            _reader?.Dispose();
+        };
     }
 
     // Referencias temporales usadas al construir las pestanas.
@@ -314,6 +327,57 @@ public sealed class MainForm : Form
         return page;
     }
 
+    private TabPage BuildPointersTab()
+    {
+        var page = new TabPage("Punteros");
+        var bar = new Panel { Dock = DockStyle.Top, Height = 66 };
+
+        var lblT = new Label { Text = "Objetivo (hex):", Left = 4, Top = 9, Width = 100 };
+        _ptrTarget = new TextBox { Left = 106, Top = 6, Width = 160, Font = Mono };
+        var lblD = new Label { Text = "Prof.:", Left = 276, Top = 9, Width = 45 };
+        _ptrDepth = new TextBox { Left = 322, Top = 6, Width = 40, Text = "4", Font = Mono };
+        var lblO = new Label { Text = "Offset max (hex):", Left = 372, Top = 9, Width = 110 };
+        _ptrMaxOff = new TextBox { Left = 484, Top = 6, Width = 80, Text = "1000", Font = Mono };
+
+        var btnScan = new Button { Text = "Escanear rutas", Left = 4, Top = 34, Width = 130 };
+        btnScan.Click += (_, _) => _ = DoPointerScanAsync();
+        var btnOne = new Button { Text = "Que apunta aqui (1 nivel)", Left = 140, Top = 34, Width = 190 };
+        btnOne.Click += (_, _) => _ = DoFindPointersAsync();
+        var btnStop = new Button { Text = "Detener", Left = 336, Top = 34, Width = 80 };
+        btnStop.Click += (_, _) => _ptrCts?.Cancel();
+
+        bar.Controls.AddRange(new Control[]
+        {
+            lblT, _ptrTarget, lblD, _ptrDepth, lblO, _ptrMaxOff, btnScan, btnOne, btnStop
+        });
+
+        _lvPointers = new ListView
+        {
+            Dock = DockStyle.Fill,
+            View = View.Details,
+            FullRowSelect = true,
+            GridLines = true,
+            MultiSelect = false
+        };
+        _lvPointers.Columns.Add("Ruta / direccion", 640);
+        _lvPointers.Columns.Add("Base / modulo", 220);
+        _lvPointers.DoubleClick += (_, _) => ResolveSelectedPointer();
+
+        var hint = new Label
+        {
+            Dock = DockStyle.Bottom,
+            Height = 22,
+            Text = "Doble clic en una ruta para resolverla en vivo y saltar a la direccion final en el visor hex.",
+            ForeColor = Color.Gray,
+            Padding = new Padding(4, 2, 0, 0)
+        };
+
+        page.Controls.Add(_lvPointers);
+        page.Controls.Add(hint);
+        page.Controls.Add(bar);
+        return page;
+    }
+
     // ---------------- Procesos ----------------
 
     private void LoadProcesses()
@@ -367,13 +431,15 @@ public sealed class MainForm : Form
         int pid = (int)_lvProcesses.SelectedItems[0].Tag!;
         string name = _lvProcesses.SelectedItems[0].SubItems[1].Text;
 
-        // Al cambiar de proceso, paramos el auto-refresco.
+        // Al cambiar de proceso, paramos el auto-refresco y cualquier escaneo.
         _chkAutoRefresh.Checked = false;
+        _ptrCts?.Cancel();
 
         try
         {
             _reader?.Dispose();
             _reader = new ProcessMemoryReader(pid);
+            _scanner = new PointerScanner(_reader);
 
             string arch = _reader.IsTargetWow64() ? "x86 (WOW64)" : "x64";
             string? path = _reader.GetProcessPath();
@@ -385,13 +451,16 @@ public sealed class MainForm : Form
             _txtHex.Text = string.Empty;
             _txtInterp.Text = string.Empty;
             _lvResults.Items.Clear();
+            _lvPointers.Items.Clear();
         }
         catch (Win32Exception ex)
         {
             _reader = null;
+            _scanner = null;
             _lblProcess.Text = "Ningun proceso abierto.";
             _lvRegions.Items.Clear();
             _lvModules.Items.Clear();
+            _lvPointers.Items.Clear();
             MessageBox.Show(ex.Message, "No se pudo abrir el proceso",
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
             _status.Text = $"Fallo al abrir PID {pid}.";
@@ -781,6 +850,108 @@ public sealed class MainForm : Form
         {
             _refreshTimer.Stop();
         }
+    }
+
+    // ---------------- Punteros / offsets ----------------
+
+    private async Task DoPointerScanAsync()
+    {
+        if (_reader == null || _scanner == null) { _status.Text = "Abre un proceso primero."; return; }
+        if (!TryParseAddress(_ptrTarget.Text, out ulong target)) { _status.Text = "Objetivo invalido (hex)."; return; }
+        if (!int.TryParse(_ptrDepth.Text.Trim(), out int depth) || depth < 1 || depth > 8)
+        { _status.Text = "Profundidad valida: 1-8."; return; }
+        if (!TryParseAddress(_ptrMaxOff.Text, out ulong maxOff)) { _status.Text = "Offset max invalido (hex)."; return; }
+
+        _lvPointers.Items.Clear();
+        _ptrCts = new CancellationTokenSource();
+        var ct = _ptrCts.Token;
+        var scanner = _scanner;
+        var progress = new Progress<string>(m => _status.Text = m);
+        try
+        {
+            var paths = await Task.Run(() =>
+            {
+                if (!scanner.IndexBuilt) scanner.BuildIndex(20, progress, ct);
+                return scanner.ScanChains(target, depth, maxOff, 1000, progress, ct);
+            }, ct);
+
+            _lvPointers.BeginUpdate();
+            foreach (var p in paths)
+            {
+                var it = new ListViewItem(p.Text) { Tag = p };
+                it.SubItems.Add($"{p.ModuleName} @ 0x{p.ModuleBase:X}");
+                _lvPointers.Items.Add(it);
+            }
+            _lvPointers.EndUpdate();
+            _status.Text = $"{paths.Count} rutas de puntero (indice: {scanner.IndexCount:N0} punteros, tam. {scanner.PointerSize} bytes).";
+        }
+        catch (OperationCanceledException) { _status.Text = "Escaneo cancelado."; }
+        catch (Exception ex) { _status.Text = "Error en el escaneo: " + ex.Message; }
+        finally { _ptrCts?.Dispose(); _ptrCts = null; }
+    }
+
+    private async Task DoFindPointersAsync()
+    {
+        if (_reader == null || _scanner == null) { _status.Text = "Abre un proceso primero."; return; }
+        if (!TryParseAddress(_ptrTarget.Text, out ulong target)) { _status.Text = "Objetivo invalido (hex)."; return; }
+        if (!TryParseAddress(_ptrMaxOff.Text, out ulong maxOff)) { _status.Text = "Offset max invalido (hex)."; return; }
+
+        _lvPointers.Items.Clear();
+        _ptrCts = new CancellationTokenSource();
+        var ct = _ptrCts.Token;
+        var scanner = _scanner;
+        var progress = new Progress<string>(m => _status.Text = m);
+        try
+        {
+            var hits = await Task.Run(() =>
+            {
+                if (!scanner.IndexBuilt) scanner.BuildIndex(20, progress, ct);
+                return scanner.FindPointersTo(target, maxOff);
+            }, ct);
+
+            _lvPointers.BeginUpdate();
+            foreach (var h in hits.Take(5000))
+            {
+                var mod = scanner.ResolveModuleOffset(h.Address);
+                string baseText = mod != null
+                    ? $"{mod.Value.mod.Name}+0x{mod.Value.offset:X} (estatica)"
+                    : "(dinamica)";
+                var it = new ListViewItem($"0x{h.Address:X}  (+0x{h.Offset:X})") { Tag = h.Address };
+                it.SubItems.Add(baseText);
+                _lvPointers.Items.Add(it);
+            }
+            _lvPointers.EndUpdate();
+            _status.Text = $"{hits.Count} punteros apuntan cerca de 0x{target:X} (mostrando hasta 5000).";
+        }
+        catch (OperationCanceledException) { _status.Text = "Cancelado."; }
+        catch (Exception ex) { _status.Text = "Error: " + ex.Message; }
+        finally { _ptrCts?.Dispose(); _ptrCts = null; }
+    }
+
+    private void ResolveSelectedPointer()
+    {
+        if (_reader == null || _scanner == null || _lvPointers.SelectedItems.Count == 0) return;
+        object? tag = _lvPointers.SelectedItems[0].Tag;
+        ulong finalAddr;
+
+        if (tag is PointerPath p)
+        {
+            var res = _scanner.ResolvePath(p.ModuleBase, p.BaseOffset, p.Offsets, _scanner.PointerSize);
+            if (res == null) { _status.Text = "La ruta ya no resuelve (la base/valor cambio)."; return; }
+            finalAddr = res.Value.finalAddress;
+            _status.Text = $"Ruta resuelta -> 0x{finalAddr:X}";
+        }
+        else if (tag is ulong a)
+        {
+            finalAddr = a;
+        }
+        else return;
+
+        _txtAddress.Text = "0x" + finalAddr.ToString("X");
+        _txtSize.Text = "256";
+        ReadHexAtAddress();
+        if (_txtHex.Parent is TabPage page && page.Parent is TabControl tc)
+            tc.SelectedTab = page;
     }
 
     // ---------------- Utilidades ----------------
