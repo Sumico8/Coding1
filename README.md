@@ -15,6 +15,9 @@ de escritorio (WinForms, .NET 8) que:
   float, double, puntero y cadena.
 - **Búsqueda tipada**: por texto (ASCII y UTF-16), o por valor **Int32 / Int64 /
   Float / Double / bytes hex**. Útil para encontrar dónde vive un valor en *tu* app.
+- **Escaneo iterativo (next-scan)**: primer escaneo por valor y refinado sucesivo
+  (cambió / no cambió / aumentó / disminuyó / exacto) hasta dejar pocas direcciones;
+  doble clic manda la dirección al visor y a la pestaña Punteros como objetivo.
 - **Punteros y offsets** (reversing): dada una dirección objetivo, encuentra qué la
   apunta (1 nivel) y **rutas de puntero estáticas** `modulo+offset -> +off -> ...`
   multinivel, ancladas a un módulo. Doble clic **resuelve la ruta en vivo** y salta

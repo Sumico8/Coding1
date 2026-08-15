@@ -38,6 +38,12 @@ public sealed class MainForm : Form
     private ListView _lvStrings = null!;
     private TextBox _txtMinLen = null!;
     private CancellationTokenSource? _stringsCts;
+    private ListView _lvScan = null!;
+    private ComboBox _cmbScanType = null!;
+    private TextBox _txtScanValue = null!;
+    private ComboBox _cmbScanFilter = null!;
+    private ScanSession? _scanSession;
+    private CancellationTokenSource? _scanCts;
     private readonly System.Windows.Forms.Timer _refreshTimer;
 
     private ProcessMemoryReader? _reader;
@@ -136,6 +142,7 @@ public sealed class MainForm : Form
         tabs.TabPages.Add(BuildSearchTab(out _txtSearch, out _lvResults, out _btnSearch));
         tabs.TabPages.Add(BuildModulesTab());
         tabs.TabPages.Add(BuildPointersTab());
+        tabs.TabPages.Add(BuildScanTab());
         tabs.TabPages.Add(BuildStringsTab());
         split2.Panel2.Controls.Add(tabs);
 
@@ -175,6 +182,7 @@ public sealed class MainForm : Form
             _searchCts?.Cancel();
             _ptrCts?.Cancel();
             _stringsCts?.Cancel();
+            _scanCts?.Cancel();
             _reader?.Dispose();
         };
     }
@@ -385,6 +393,64 @@ public sealed class MainForm : Form
         return page;
     }
 
+    private TabPage BuildScanTab()
+    {
+        var page = new TabPage("Escaneo");
+        var bar = new Panel { Dock = DockStyle.Top, Height = 66 };
+
+        var lblType = new Label { Text = "Tipo:", Left = 4, Top = 9, Width = 38 };
+        _cmbScanType = new ComboBox { Left = 44, Top = 6, Width = 90, DropDownStyle = ComboBoxStyle.DropDownList };
+        _cmbScanType.Items.AddRange(new object[] { "Int32", "Int64", "Float", "Double" });
+        _cmbScanType.SelectedIndex = 0;
+
+        var lblVal = new Label { Text = "Valor:", Left = 142, Top = 9, Width = 45 };
+        _txtScanValue = new TextBox { Left = 188, Top = 6, Width = 150, Font = Mono };
+
+        var btnFirst = new Button { Text = "Primer escaneo", Left = 4, Top = 34, Width = 130 };
+        btnFirst.Click += (_, _) => _ = DoFirstScanAsync();
+
+        var lblF = new Label { Text = "Filtro:", Left = 142, Top = 38, Width = 45 };
+        _cmbScanFilter = new ComboBox { Left = 188, Top = 35, Width = 130, DropDownStyle = ComboBoxStyle.DropDownList };
+        _cmbScanFilter.Items.AddRange(new object[] { "Exacto", "Cambio", "No cambio", "Aumento", "Disminuyo" });
+        _cmbScanFilter.SelectedIndex = 1;
+        var btnNext = new Button { Text = "Siguiente escaneo", Left = 324, Top = 34, Width = 150 };
+        btnNext.Click += (_, _) => _ = DoNextScanAsync();
+        var btnStop = new Button { Text = "Detener", Left = 480, Top = 34, Width = 80 };
+        btnStop.Click += (_, _) => _scanCts?.Cancel();
+
+        bar.Controls.AddRange(new Control[]
+        {
+            lblType, _cmbScanType, lblVal, _txtScanValue, btnFirst, lblF, _cmbScanFilter, btnNext, btnStop
+        });
+
+        _lvScan = new ListView
+        {
+            Dock = DockStyle.Fill,
+            View = View.Details,
+            FullRowSelect = true,
+            GridLines = true,
+            MultiSelect = false
+        };
+        _lvScan.Columns.Add("Direccion", 180);
+        _lvScan.Columns.Add("Valor", 160);
+        _lvScan.Columns.Add("Base / modulo", 260);
+        _lvScan.DoubleClick += (_, _) => JumpFromScan();
+
+        var hint = new Label
+        {
+            Dock = DockStyle.Bottom,
+            Height = 22,
+            Text = "Doble clic: manda la direccion al visor hex y a la pestana Punteros como objetivo.",
+            ForeColor = Color.Gray,
+            Padding = new Padding(4, 2, 0, 0)
+        };
+
+        page.Controls.Add(_lvScan);
+        page.Controls.Add(hint);
+        page.Controls.Add(bar);
+        return page;
+    }
+
     private TabPage BuildStringsTab()
     {
         var page = new TabPage("Strings");
@@ -486,6 +552,7 @@ public sealed class MainForm : Form
         _chkAutoRefresh.Checked = false;
         _ptrCts?.Cancel();
         _stringsCts?.Cancel();
+        _scanCts?.Cancel();
 
         try
         {
@@ -505,16 +572,20 @@ public sealed class MainForm : Form
             _lvResults.Items.Clear();
             _lvPointers.Items.Clear();
             _lvStrings.Items.Clear();
+            _lvScan.Items.Clear();
+            _scanSession = null;
         }
         catch (Win32Exception ex)
         {
             _reader = null;
             _scanner = null;
+            _scanSession = null;
             _lblProcess.Text = "Ningun proceso abierto.";
             _lvRegions.Items.Clear();
             _lvModules.Items.Clear();
             _lvPointers.Items.Clear();
             _lvStrings.Items.Clear();
+            _lvScan.Items.Clear();
             MessageBox.Show(ex.Message, "No se pudo abrir el proceso",
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
             _status.Text = $"Fallo al abrir PID {pid}.";
@@ -1002,6 +1073,85 @@ public sealed class MainForm : Form
         else return;
 
         _txtAddress.Text = "0x" + finalAddr.ToString("X");
+        _txtSize.Text = "256";
+        ReadHexAtAddress();
+        if (_txtHex.Parent is TabPage page && page.Parent is TabControl tc)
+            tc.SelectedTab = page;
+    }
+
+    // ---------------- Escaneo iterativo ----------------
+
+    private async Task DoFirstScanAsync()
+    {
+        if (_reader == null) { _status.Text = "Abre un proceso primero."; return; }
+        if (string.IsNullOrWhiteSpace(_txtScanValue.Text)) { _status.Text = "Indica el valor a buscar."; return; }
+
+        var type = (ScanType)_cmbScanType.SelectedIndex;
+        string value = _txtScanValue.Text;
+        _scanSession = new ScanSession(_reader, type);
+        _lvScan.Items.Clear();
+        _scanCts = new CancellationTokenSource();
+        var ct = _scanCts.Token;
+        var session = _scanSession;
+        var progress = new Progress<string>(m => _status.Text = m);
+        const int maxCandidates = 2_000_000;
+        try
+        {
+            await Task.Run(() => session.FirstScan(value, maxCandidates, progress, ct), ct);
+            RefreshScanList();
+            _status.Text = $"Primer escaneo: {session.Count:N0} candidatos.";
+        }
+        catch (OperationCanceledException) { _status.Text = "Escaneo cancelado."; }
+        catch (Exception ex) { _status.Text = "Error: " + ex.Message; }
+        finally { _scanCts?.Dispose(); _scanCts = null; }
+    }
+
+    private async Task DoNextScanAsync()
+    {
+        if (_reader == null || _scanSession == null) { _status.Text = "Haz primero un 'Primer escaneo'."; return; }
+
+        var filter = (NextFilter)_cmbScanFilter.SelectedIndex;
+        string? value = _txtScanValue.Text;
+        _scanCts = new CancellationTokenSource();
+        var ct = _scanCts.Token;
+        var session = _scanSession;
+        var progress = new Progress<string>(m => _status.Text = m);
+        try
+        {
+            await Task.Run(() => session.NextScan(filter, value, progress, ct), ct);
+            RefreshScanList();
+            _status.Text = $"Refinado: {session.Count:N0} candidatos.";
+        }
+        catch (OperationCanceledException) { _status.Text = "Escaneo cancelado."; }
+        catch (Exception ex) { _status.Text = "Error: " + ex.Message; }
+        finally { _scanCts?.Dispose(); _scanCts = null; }
+    }
+
+    private void RefreshScanList()
+    {
+        if (_scanSession == null) return;
+        _lvScan.BeginUpdate();
+        _lvScan.Items.Clear();
+        int shown = 0;
+        foreach (var (addr, value) in _scanSession.Candidates)
+        {
+            if (shown++ >= 5000) break;
+            var it = new ListViewItem("0x" + addr.ToString("X")) { Tag = addr };
+            it.SubItems.Add(_scanSession.FormatValue(value));
+            var mod = _scanner?.ResolveModuleOffset(addr);
+            it.SubItems.Add(mod != null ? $"{mod.Value.mod.Name}+0x{mod.Value.offset:X}" : "(dinamica)");
+            _lvScan.Items.Add(it);
+        }
+        _lvScan.EndUpdate();
+    }
+
+    private void JumpFromScan()
+    {
+        if (_lvScan.SelectedItems.Count == 0) return;
+        ulong addr = (ulong)_lvScan.SelectedItems[0].Tag!;
+        string hex = "0x" + addr.ToString("X");
+        _ptrTarget.Text = hex; // lo deja listo para escanear rutas de puntero
+        _txtAddress.Text = hex;
         _txtSize.Text = "256";
         ReadHexAtAddress();
         if (_txtHex.Parent is TabPage page && page.Parent is TabControl tc)
