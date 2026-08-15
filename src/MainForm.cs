@@ -50,6 +50,8 @@ public sealed class MainForm : Form
     private TextBox _disasmAddr = null!;
     private TextBox _disasmCount = null!;
     private TextBox _txtDisasm = null!;
+    private TextBox _txtReport = null!;
+    private CancellationTokenSource? _reportCts;
     private readonly System.Windows.Forms.Timer _refreshTimer;
 
     private ProcessMemoryReader? _reader;
@@ -156,6 +158,7 @@ public sealed class MainForm : Form
         tabs.TabPages.Add(BuildSecurityTab());
         tabs.TabPages.Add(BuildThreadsTab());
         tabs.TabPages.Add(BuildDisasmTab());
+        tabs.TabPages.Add(BuildInformeTab());
         split2.Panel2.Controls.Add(tabs);
 
         // Temporizador para el auto-refresco del visor hexadecimal.
@@ -196,6 +199,7 @@ public sealed class MainForm : Form
             _stringsCts?.Cancel();
             _scanCts?.Cancel();
             _secCts?.Cancel();
+            _reportCts?.Cancel();
             _reader?.Dispose();
         };
     }
@@ -613,6 +617,43 @@ public sealed class MainForm : Form
         };
 
         page.Controls.Add(_lvStrings);
+        page.Controls.Add(hint);
+        page.Controls.Add(bar);
+        return page;
+    }
+
+    private TabPage BuildInformeTab()
+    {
+        var page = new TabPage("Informe");
+        var bar = new Panel { Dock = DockStyle.Top, Height = 34 };
+        var btnGo = new Button { Text = "Generar informe (HTML+JSON)...", Left = 4, Top = 4, Width = 220 };
+        btnGo.Click += (_, _) => _ = DoReportAsync();
+        var btnStop = new Button { Text = "Detener", Left = 230, Top = 4, Width = 80 };
+        btnStop.Click += (_, _) => _reportCts?.Cancel();
+        bar.Controls.AddRange(new Control[] { btnGo, btnStop });
+
+        _txtReport = new TextBox
+        {
+            Dock = DockStyle.Fill,
+            Multiline = true,
+            ReadOnly = true,
+            ScrollBars = ScrollBars.Both,
+            WordWrap = false,
+            Font = Mono,
+            BackColor = Color.FromArgb(24, 24, 24),
+            ForeColor = Color.FromArgb(210, 220, 210)
+        };
+
+        var hint = new Label
+        {
+            Dock = DockStyle.Bottom,
+            Height = 22,
+            Text = "Ejecuta toda la bateria (seguridad, entropia, hilos, modulos) y guarda un informe HTML + JSON.",
+            ForeColor = Color.Gray,
+            Padding = new Padding(4, 2, 0, 0)
+        };
+
+        page.Controls.Add(_txtReport);
         page.Controls.Add(hint);
         page.Controls.Add(bar);
         return page;
@@ -1550,6 +1591,64 @@ public sealed class MainForm : Form
         {
             _status.Text = "Error al generar minidump: " + ex.Message;
         }
+    }
+
+    // ---------------- Informe de triage ----------------
+
+    private async Task DoReportAsync()
+    {
+        if (_reader == null) { _status.Text = "Abre un proceso primero."; return; }
+
+        string name = "(desconocido)";
+        try { using var p = Process.GetProcessById(_reader.ProcessId); name = p.ProcessName; }
+        catch { /* el nombre es opcional */ }
+
+        _reportCts = new CancellationTokenSource();
+        var ct = _reportCts.Token;
+        var reader = _reader;
+        var progress = new Progress<string>(m => _status.Text = m);
+        _txtReport.Text = "Generando informe...";
+        try
+        {
+            var report = await Task.Run(() => TriageEngine.Analyze(reader, name, progress, ct), ct);
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"Proceso: {report.ProcessName} (PID {report.Pid})  |  {report.Architecture}");
+            if (!string.IsNullOrEmpty(report.Path)) sb.AppendLine($"Ruta: {report.Path}");
+            sb.AppendLine($"Generado (UTC): {report.GeneratedUtc}");
+            sb.AppendLine();
+            sb.AppendLine($"Regiones (commit): {report.RegionCount:N0}   Memoria: {FormatBytes(report.CommittedBytes)}");
+            sb.AppendLine($"Hallazgos de seguridad: {report.Findings.Count} ({report.HighSeverityCount} de severidad alta)");
+            sb.AppendLine($"Regiones de alta entropia: {report.HighEntropyRegions.Count}");
+            sb.AppendLine($"Hilos sospechosos: {report.SuspiciousThreads.Count}");
+            sb.AppendLine($"Modulos: {report.Modules.Count:N0}");
+            sb.AppendLine();
+            foreach (var f in report.Findings.Take(50))
+                sb.AppendLine($"  [{f.Severity}] {f.Category}: {f.Detail}");
+            _txtReport.Text = sb.ToString();
+
+            using var sfd = new SaveFileDialog
+            {
+                Title = "Guardar informe (se generan .html y .json)",
+                FileName = $"informe_pid{report.Pid}.html",
+                Filter = "HTML (*.html)|*.html|Todos los archivos (*.*)|*.*"
+            };
+            if (sfd.ShowDialog(this) == DialogResult.OK)
+            {
+                string htmlPath = sfd.FileName;
+                string jsonPath = Path.ChangeExtension(htmlPath, ".json");
+                File.WriteAllText(htmlPath, HtmlReportWriter.Write(report));
+                File.WriteAllText(jsonPath, JsonReportWriter.Write(report));
+                _status.Text = $"Informe guardado: {htmlPath} (+ {Path.GetFileName(jsonPath)}).";
+            }
+            else
+            {
+                _status.Text = "Informe generado (no guardado en disco).";
+            }
+        }
+        catch (OperationCanceledException) { _status.Text = "Informe cancelado."; _txtReport.Text = string.Empty; }
+        catch (Exception ex) { _status.Text = "Error al generar el informe: " + ex.Message; }
+        finally { _reportCts?.Dispose(); _reportCts = null; }
     }
 
     // ---------------- Utilidades ----------------

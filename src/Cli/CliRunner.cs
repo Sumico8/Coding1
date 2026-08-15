@@ -58,6 +58,8 @@ internal static class CliRunner
                     return CmdDump(opts, elevated);
                 case "minidump":
                     return CmdMinidump(opts, elevated);
+                case "report":
+                    return CmdReport(opts, elevated);
                 default:
                     Console.Error.WriteLine(
                         $"Verbo desconocido: '{verb}'. Ejecuta 'MemReader.exe help' para ver el uso.");
@@ -189,6 +191,26 @@ internal static class CliRunner
         return 0;
     }
 
+    private static int CmdReport(Dictionary<string, string> opts, bool elevated)
+    {
+        int pid = RequirePid(opts);
+        WarnIfNotElevated(elevated);
+        var progress = Progress(opts);
+        var report = TriageEngine.Analyze(pid, progress, CancellationToken.None);
+        EndProgress();
+
+        string htmlPath = Get(opts, "out") ?? $"informe_pid{pid}.html";
+        string jsonPath = Path.ChangeExtension(htmlPath, ".json");
+        File.WriteAllText(htmlPath, HtmlReportWriter.Write(report));
+        File.WriteAllText(jsonPath, JsonReportWriter.Write(report));
+        Console.Error.WriteLine(
+            $"Informe generado: {htmlPath} (+ {jsonPath}). " +
+            $"{report.HighSeverityCount} hallazgos de severidad alta, " +
+            $"{report.HighEntropyRegions.Count} regiones de alta entropia, " +
+            $"{report.SuspiciousThreads.Count} hilos sospechosos.");
+        return 0;
+    }
+
     private static int PrintHelp()
     {
         Console.WriteLine(
@@ -211,6 +233,8 @@ VERBOS:
             Vuelca todas las regiones legibles a una carpeta (con indice).
   minidump  --pid <N> [--out <archivo.dmp>] [--normal]
             Genera un minidump (memoria completa por defecto).
+  report    --pid <N> [--out <archivo.html>]
+            Informe de triage completo en HTML + JSON (mismo nombre base).
   version   Muestra la version.
   help      Muestra esta ayuda.
 
@@ -224,6 +248,7 @@ NOTAS:
 EJEMPLOS:
   MemReader.exe list --filter chrome --out procs.csv
   MemReader.exe security --pid 1234 --out seguridad.csv
+  MemReader.exe report --pid 1234 --out informe.html
   MemReader.exe strings --pid 1234 --min 6 > cadenas.csv");
         return 0;
     }
