@@ -59,11 +59,11 @@ public sealed class MainForm : Form
     // --- Interfaz nueva: navegacion lateral, tema, busqueda e identificador ---
     private Panel _content = null!;
     private FlowLayoutPanel _sidebar = null!;
-    private TabPage _activePage = null!;
-    private TabPage _hexPage = null!;
-    private TabPage _procPage = null!;
-    private TabPage _regionsPage = null!;
-    private readonly Dictionary<TabPage, Button> _navButtons = new();
+    private Panel _activePage = null!;
+    private Panel _hexPage = null!;
+    private Panel _procPage = null!;
+    private Panel _regionsPage = null!;
+    private readonly Dictionary<Panel, Button> _navButtons = new();
     private Button _btnTheme = null!;
     private Button _btnEdit = null!;
     private TextBox _txtGlobalFind = null!;
@@ -81,7 +81,7 @@ public sealed class MainForm : Form
     private ThemedListView _lvLabels = null!;
     private TextBox _lblIdentity = null!;
     private ContextMenuStrip _ctxLabel = null!;
-    private readonly Dictionary<TabPage, ListViewFilter> _tabFilters = new();
+    private readonly Dictionary<Panel, ListViewFilter> _tabFilters = new();
     private ListViewFilter? _filterResults, _filterScan, _filterStrings, _filterPointers,
         _filterSecurity, _filterThreads, _filterModules, _filterLabels, _filterRegions;
 
@@ -164,7 +164,7 @@ public sealed class MainForm : Form
         var threadsPage = BuildThreadsTab();
         var disasmPage = BuildDisasmTab();
 
-        var sections = new (string label, TabPage page)[]
+        var sections = new (string label, Panel page)[]
         {
             ("👁   Procesos", _procPage),
             ("🗺   Regiones", _regionsPage),
@@ -267,7 +267,7 @@ public sealed class MainForm : Form
 
     // ---------------- Navegacion lateral ----------------
 
-    private Button MakeNavButton(string text, TabPage page)
+    private Button MakeNavButton(string text, Panel page)
     {
         var btn = new Button
         {
@@ -285,7 +285,7 @@ public sealed class MainForm : Form
         return btn;
     }
 
-    private void ShowSection(TabPage page)
+    private void ShowSection(Panel page)
     {
         if (page == null) return;
         _activePage = page;
@@ -305,9 +305,9 @@ public sealed class MainForm : Form
         UpdateTimerState();
     }
 
-    private TabPage BuildProcessSection()
+    private Panel BuildProcessSection()
     {
-        var page = new TabPage("Procesos");
+        var page = new Panel();
         var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, WrapContents = true, Padding = new Padding(6, 4, 6, 4) };
         var btnRefresh = new Button { Text = "Actualizar", Width = 110, Margin = new Padding(0, 4, 6, 0) };
         btnRefresh.Click += (_, _) => LoadProcesses();
@@ -342,9 +342,9 @@ public sealed class MainForm : Form
         return page;
     }
 
-    private TabPage BuildRegionsSection()
+    private Panel BuildRegionsSection()
     {
-        var page = new TabPage("Regiones");
+        var page = new Panel();
         var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, WrapContents = true, Padding = new Padding(4, 4, 4, 4) };
         _chkOnlyReadable = new CheckBox { Text = "Solo legibles", Checked = true, AutoSize = true, Margin = new Padding(4, 8, 10, 0) };
         _chkOnlyReadable.CheckedChanged += (_, _) => { if (_reader != null) EnumerateRegions(); };
@@ -440,7 +440,7 @@ public sealed class MainForm : Form
     // ---------------- Busqueda (filtros por lista) ----------------
 
     /// <summary>Anade una caja de filtro rapido a una barra y la asocia al ListView.</summary>
-    private ListViewFilter AddFilter(FlowLayoutPanel bar, ListView lv, TabPage page)
+    private ListViewFilter AddFilter(FlowLayoutPanel bar, ListView lv, Panel page)
     {
         var lbl = new Label { Text = "Filtrar:", AutoSize = true, Margin = new Padding(12, 8, 3, 0), Tag = "hint" };
         var box = new TextBox { Width = 150, Margin = new Padding(3, 5, 3, 0) };
@@ -470,9 +470,9 @@ public sealed class MainForm : Form
 
     // ---------------- Etiquetas / Identificador ----------------
 
-    private TabPage BuildLabelsTab()
+    private Panel BuildLabelsTab()
     {
-        var page = new TabPage("Etiquetas");
+        var page = new Panel();
         var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, WrapContents = true, Padding = new Padding(6, 4, 6, 4) };
 
         var btnAdd = new Button { Text = "Anadir", Width = 90, Margin = new Padding(0, 4, 4, 0) };
@@ -729,9 +729,9 @@ public sealed class MainForm : Form
 
     // ---------------- Estructuras (disector) ----------------
 
-    private TabPage BuildStructSection()
+    private Panel BuildStructSection()
     {
-        var page = new TabPage("Estructuras");
+        var page = new Panel();
         var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 76, WrapContents = true, Padding = new Padding(6, 4, 6, 4) };
 
         var lblBase = new Label { Text = "Base (hex):", AutoSize = true, Margin = new Padding(0, 8, 3, 0), Tag = "hint" };
@@ -881,9 +881,9 @@ public sealed class MainForm : Form
     private TextBox? _hexSize;
     private TextBox? _hexView;
 
-    private TabPage BuildHexTab()
+    private Panel BuildHexTab()
     {
-        var page = new TabPage("Visor hexadecimal");
+        var page = new Panel();
         var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, WrapContents = true, Padding = new Padding(6, 4, 6, 4) };
 
         var lblAddr = new Label { Text = "Direccion (hex):", Left = 4, Top = 9, Width = 100 };
@@ -959,9 +959,9 @@ public sealed class MainForm : Form
         return page;
     }
 
-    private TabPage BuildSearchTab(out TextBox txtSearch, out ListView lvResults, out Button btnSearch)
+    private Panel BuildSearchTab(out TextBox txtSearch, out ListView lvResults, out Button btnSearch)
     {
-        var page = new TabPage("Buscar en memoria");
+        var page = new Panel();
         var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, WrapContents = true, Padding = new Padding(6, 4, 6, 4) };
 
         var lblType = new Label { Text = "Tipo:", Left = 4, Top = 9, Width = 38 };
@@ -1014,9 +1014,9 @@ public sealed class MainForm : Form
         return page;
     }
 
-    private TabPage BuildModulesTab()
+    private Panel BuildModulesTab()
     {
-        var page = new TabPage("Modulos");
+        var page = new Panel();
         var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, WrapContents = true, Padding = new Padding(6, 4, 6, 4) };
 
         _lvModules = new ThemedListView
@@ -1049,9 +1049,9 @@ public sealed class MainForm : Form
         return page;
     }
 
-    private TabPage BuildPointersTab()
+    private Panel BuildPointersTab()
     {
-        var page = new TabPage("Punteros");
+        var page = new Panel();
         var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 72, WrapContents = true, Padding = new Padding(6, 4, 6, 4) };
 
         var lblT = new Label { Text = "Objetivo (hex):", Left = 4, Top = 9, Width = 100 };
@@ -1101,9 +1101,9 @@ public sealed class MainForm : Form
         return page;
     }
 
-    private TabPage BuildScanTab()
+    private Panel BuildScanTab()
     {
-        var page = new TabPage("Escaneo");
+        var page = new Panel();
         var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 72, WrapContents = true, Padding = new Padding(6, 4, 6, 4) };
 
         var lblType = new Label { Text = "Tipo:", Left = 4, Top = 9, Width = 38 };
@@ -1167,9 +1167,9 @@ public sealed class MainForm : Form
         return page;
     }
 
-    private TabPage BuildDisasmTab()
+    private Panel BuildDisasmTab()
     {
-        var page = new TabPage("Desensamblado");
+        var page = new Panel();
         var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, WrapContents = true, Padding = new Padding(6, 4, 6, 4) };
 
         var lblA = new Label { Text = "Direccion (hex):", Left = 4, Top = 9, Width = 100 };
@@ -1199,9 +1199,9 @@ public sealed class MainForm : Form
         return page;
     }
 
-    private TabPage BuildThreadsTab()
+    private Panel BuildThreadsTab()
     {
-        var page = new TabPage("Hilos");
+        var page = new Panel();
         var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, WrapContents = true, Padding = new Padding(6, 4, 6, 4) };
         var btnGo = new Button { Text = "Listar hilos", Left = 4, Top = 4, Width = 120 };
         btnGo.Click += (_, _) => ListThreads();
@@ -1237,9 +1237,9 @@ public sealed class MainForm : Form
         return page;
     }
 
-    private TabPage BuildSecurityTab()
+    private Panel BuildSecurityTab()
     {
-        var page = new TabPage("Seguridad");
+        var page = new Panel();
         var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, WrapContents = true, Padding = new Padding(6, 4, 6, 4) };
 
         var btnGo = new Button { Text = "Analizar seguridad", Left = 4, Top = 4, Width = 150 };
@@ -1280,9 +1280,9 @@ public sealed class MainForm : Form
         return page;
     }
 
-    private TabPage BuildStringsTab()
+    private Panel BuildStringsTab()
     {
-        var page = new TabPage("Strings");
+        var page = new Panel();
         var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, WrapContents = true, Padding = new Padding(6, 4, 6, 4) };
 
         var lbl = new Label { Text = "Long. min:", Left = 4, Top = 9, Width = 70 };
