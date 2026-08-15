@@ -7,6 +7,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Etiqueta para una release versionada (ej. v1.0.0). Vacio = no crear release numerada."
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -68,4 +73,18 @@ jobs:
             This executable is unsigned: on first launch Windows SmartScreen may show
             "Windows protected your PC" - click "More info" then "Run anyway".
             Run MemReader as Administrator.
+          files: publish/MemReader.exe
+
+      - name: Create versioned release (manual dispatch)
+        if: github.event_name == 'workflow_dispatch' && inputs.version != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.version }}
+          name: ${{ inputs.version }}
+          make_latest: true
+          fail_on_unmatched_files: true
+          body: >
+            MemReader ${{ inputs.version }}. This executable is unsigned: on first launch
+            Windows SmartScreen may show "Windows protected your PC" - click "More info"
+            then "Run anyway". Run MemReader as Administrator.
           files: publish/MemReader.exe
