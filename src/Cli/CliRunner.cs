@@ -405,6 +405,7 @@ internal static class CliRunner
         using var reader = new ProcessMemoryReader(pid);
         var progress = Progress(opts);
         var hooks = HookScanner.Scan(reader, progress, CancellationToken.None);
+        hooks.AddRange(IatHookScanner.Scan(reader, progress, CancellationToken.None));
         EndProgress();
 
         var sb = new StringBuilder();
@@ -412,7 +413,7 @@ internal static class CliRunner
         foreach (var h in hooks)
             sb.AppendLine($"{h.Module},{Csv(h.Function)},{h.AddressText},{h.HookType},{Csv(h.Target)},{h.PrologueHex}");
         WriteOutput(sb.ToString(), Get(opts, "out"));
-        Console.Error.WriteLine($"{hooks.Count} posibles hooks inline.");
+        Console.Error.WriteLine($"{hooks.Count} posibles hooks (inline + IAT).");
         return 0;
     }
 

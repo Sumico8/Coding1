@@ -915,7 +915,7 @@ public sealed class MainForm : Form
         {
             Dock = DockStyle.Bottom,
             Height = 22,
-            Text = "Prologos de exports que empiezan con un salto (posible hook de EDR/AV o inyeccion). Solo deteccion. Doble clic para ver.",
+            Text = "Hooks inline (prologo de export con salto) e IAT (import que apunta fuera de todo modulo). Posible EDR/AV o inyeccion. Solo deteccion. Doble clic para ver.",
             ForeColor = Color.Gray,
             Padding = new Padding(4, 2, 0, 0)
         };
@@ -2505,7 +2505,12 @@ public sealed class MainForm : Form
         var progress = new Progress<string>(m => _status.Text = m);
         try
         {
-            var hooks = await Task.Run(() => HookScanner.Scan(reader, progress, ct), ct);
+            var hooks = await Task.Run(() =>
+            {
+                var list = HookScanner.Scan(reader, progress, ct);
+                list.AddRange(IatHookScanner.Scan(reader, progress, ct));
+                return list;
+            }, ct);
             _lvHooks.BeginUpdate();
             foreach (var h in hooks)
             {
@@ -2520,8 +2525,8 @@ public sealed class MainForm : Form
             }
             _lvHooks.EndUpdate();
             _status.Text = hooks.Count == 0
-                ? "No se detectaron hooks inline en los exports analizados."
-                : $"{hooks.Count} posibles hooks inline detectados.";
+                ? "No se detectaron hooks (inline ni IAT)."
+                : $"{hooks.Count} posibles hooks detectados (inline + IAT).";
         }
         catch (OperationCanceledException) { _status.Text = "Busqueda de hooks cancelada."; }
         catch (Exception ex) { _status.Text = "Error: " + ex.Message; }

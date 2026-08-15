@@ -152,6 +152,73 @@ public sealed class PeImage
         return list;
     }
 
+    /// <summary>Una entrada de la tabla de importacion (IAT) resuelta.</summary>
+    public sealed record ImportEntry(string Dll, string Function, ulong IatAddress, ulong ResolvedValue);
+
+    /// <summary>
+    /// Recorre la tabla de importacion y devuelve, por cada funcion importada, la
+    /// direccion de su celda en la IAT y el valor resuelto (a donde apunta). Sirve
+    /// para detectar hooks de IAT. Leido de memoria.
+    /// </summary>
+    public List<ImportEntry> EnumerateImports(
+        ProcessMemoryReader reader, ulong baseAddr, int maxPerDll = 4096, int maxTotal = 100000)
+    {
+        var list = new List<ImportEntry>();
+        var (dirRva, _) = Directory(DIR_IMPORT);
+        if (dirRva == 0) return list;
+
+        int ptr = Is64Bit ? 8 : 4;
+        ulong ordinalFlag = Is64Bit ? 0x8000000000000000UL : 0x80000000UL;
+
+        for (int d = 0; d < 4096 && list.Count < maxTotal; d++)
+        {
+            byte[] desc;
+            try { desc = reader.ReadBytes(baseAddr + dirRva + (uint)(d * 20), 20); }
+            catch { break; }
+            if (desc.Length < 20) break;
+
+            bool allZero = true;
+            for (int k = 0; k < 20; k++) if (desc[k] != 0) { allZero = false; break; }
+            if (allZero) break;
+
+            uint iltRva = BitConverter.ToUInt32(desc, 0);   // OriginalFirstThunk (nombres)
+            uint nameRva = BitConverter.ToUInt32(desc, 12);
+            uint iatRva = BitConverter.ToUInt32(desc, 16);  // FirstThunk (direcciones resueltas)
+            if (iatRva == 0) continue;
+
+            string dll = nameRva != 0 ? ReadCString(reader, baseAddr + nameRva, 256) : "";
+            uint namesRva = iltRva != 0 ? iltRva : iatRva;
+
+            for (int i = 0; i < maxPerDll && list.Count < maxTotal; i++)
+            {
+                byte[] iatBytes;
+                try { iatBytes = reader.ReadBytes(baseAddr + iatRva + (uint)(i * ptr), ptr); }
+                catch { break; }
+                if (iatBytes.Length < ptr) break;
+                ulong resolved = Is64Bit ? BitConverter.ToUInt64(iatBytes, 0) : BitConverter.ToUInt32(iatBytes, 0);
+
+                ulong nameEntry = 0;
+                try
+                {
+                    byte[] nb = reader.ReadBytes(baseAddr + namesRva + (uint)(i * ptr), ptr);
+                    if (nb.Length >= ptr) nameEntry = Is64Bit ? BitConverter.ToUInt64(nb, 0) : BitConverter.ToUInt32(nb, 0);
+                }
+                catch { /* sin nombres */ }
+
+                ulong terminator = iltRva != 0 ? nameEntry : resolved;
+                if (terminator == 0) break;
+
+                string func;
+                if (nameEntry == 0) func = "";
+                else if ((nameEntry & ordinalFlag) != 0) func = $"#{nameEntry & 0xFFFF}";
+                else func = ReadCString(reader, baseAddr + (uint)(nameEntry & 0x7FFFFFFF) + 2, 256);
+
+                list.Add(new ImportEntry(dll, func, baseAddr + iatRva + (uint)(i * ptr), resolved));
+            }
+        }
+        return list;
+    }
+
     /// <summary>Direcciones (VA) de los TLS callbacks, si el modulo define TLS.</summary>
     public List<ulong> EnumerateTlsCallbacks(
         ProcessMemoryReader reader, ulong baseAddr, int max = 64)
