@@ -25,6 +25,10 @@ de escritorio (WinForms, .NET 8) que:
   cálculo, sin modificar memoria.
 - **Auto-refresco (1 s)** del visor para vigilar cómo cambia un valor en vivo.
 - **Copiar / exportar** el volcado (texto) y los resultados de búsqueda (CSV).
+- **Análisis de seguridad / postura** del proceso: detecta indicadores como
+  regiones **RWX**, **memoria ejecutable no respaldada por imagen** (posible
+  shellcode/inyección) y **módulos sin ASLR/DEP/CFG** (parseando el PE en memoria).
+  Es detección/reporte, no explotación.
 - **Extracción de strings** (tipo `strings`): saca todas las cadenas ASCII/UTF-16
   imprimibles de la memoria, con su dirección; útil para triage/forense.
 - **Vuelca** una región a `.bin`, o **todas** las regiones legibles a una carpeta

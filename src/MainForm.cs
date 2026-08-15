@@ -44,6 +44,8 @@ public sealed class MainForm : Form
     private ComboBox _cmbScanFilter = null!;
     private ScanSession? _scanSession;
     private CancellationTokenSource? _scanCts;
+    private ListView _lvSecurity = null!;
+    private CancellationTokenSource? _secCts;
     private readonly System.Windows.Forms.Timer _refreshTimer;
 
     private ProcessMemoryReader? _reader;
@@ -144,6 +146,7 @@ public sealed class MainForm : Form
         tabs.TabPages.Add(BuildPointersTab());
         tabs.TabPages.Add(BuildScanTab());
         tabs.TabPages.Add(BuildStringsTab());
+        tabs.TabPages.Add(BuildSecurityTab());
         split2.Panel2.Controls.Add(tabs);
 
         // Temporizador para el auto-refresco del visor hexadecimal.
@@ -183,6 +186,7 @@ public sealed class MainForm : Form
             _ptrCts?.Cancel();
             _stringsCts?.Cancel();
             _scanCts?.Cancel();
+            _secCts?.Cancel();
             _reader?.Dispose();
         };
     }
@@ -451,6 +455,48 @@ public sealed class MainForm : Form
         return page;
     }
 
+    private TabPage BuildSecurityTab()
+    {
+        var page = new TabPage("Seguridad");
+        var bar = new Panel { Dock = DockStyle.Top, Height = 34 };
+
+        var btnGo = new Button { Text = "Analizar seguridad", Left = 4, Top = 4, Width = 150 };
+        btnGo.Click += (_, _) => _ = DoSecurityAnalysisAsync();
+        var btnStop = new Button { Text = "Detener", Left = 160, Top = 4, Width = 80 };
+        btnStop.Click += (_, _) => _secCts?.Cancel();
+        var btnCsv = new Button { Text = "Exportar CSV...", Left = 246, Top = 4, Width = 120 };
+        btnCsv.Click += (_, _) => ExportSecurityCsv();
+
+        bar.Controls.AddRange(new Control[] { btnGo, btnStop, btnCsv });
+
+        _lvSecurity = new ListView
+        {
+            Dock = DockStyle.Fill,
+            View = View.Details,
+            FullRowSelect = true,
+            GridLines = true,
+            MultiSelect = false
+        };
+        _lvSecurity.Columns.Add("Severidad", 80);
+        _lvSecurity.Columns.Add("Categoria", 180);
+        _lvSecurity.Columns.Add("Detalle", 560);
+        _lvSecurity.DoubleClick += (_, _) => JumpFromSecurity();
+
+        var hint = new Label
+        {
+            Dock = DockStyle.Bottom,
+            Height = 22,
+            Text = "Deteccion de indicadores (RWX, ejecutable no respaldado, modulos sin ASLR/DEP/CFG). Doble clic para ver la direccion.",
+            ForeColor = Color.Gray,
+            Padding = new Padding(4, 2, 0, 0)
+        };
+
+        page.Controls.Add(_lvSecurity);
+        page.Controls.Add(hint);
+        page.Controls.Add(bar);
+        return page;
+    }
+
     private TabPage BuildStringsTab()
     {
         var page = new TabPage("Strings");
@@ -553,6 +599,7 @@ public sealed class MainForm : Form
         _ptrCts?.Cancel();
         _stringsCts?.Cancel();
         _scanCts?.Cancel();
+        _secCts?.Cancel();
 
         try
         {
@@ -573,6 +620,7 @@ public sealed class MainForm : Form
             _lvPointers.Items.Clear();
             _lvStrings.Items.Clear();
             _lvScan.Items.Clear();
+            _lvSecurity.Items.Clear();
             _scanSession = null;
         }
         catch (Win32Exception ex)
@@ -586,6 +634,7 @@ public sealed class MainForm : Form
             _lvPointers.Items.Clear();
             _lvStrings.Items.Clear();
             _lvScan.Items.Clear();
+            _lvSecurity.Items.Clear();
             MessageBox.Show(ex.Message, "No se pudo abrir el proceso",
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
             _status.Text = $"Fallo al abrir PID {pid}.";
@@ -1156,6 +1205,76 @@ public sealed class MainForm : Form
         ReadHexAtAddress();
         if (_txtHex.Parent is TabPage page && page.Parent is TabControl tc)
             tc.SelectedTab = page;
+    }
+
+    // ---------------- Seguridad ----------------
+
+    private async Task DoSecurityAnalysisAsync()
+    {
+        if (_reader == null) { _status.Text = "Abre un proceso primero."; return; }
+        _lvSecurity.Items.Clear();
+        _secCts = new CancellationTokenSource();
+        var ct = _secCts.Token;
+        var reader = _reader;
+        var progress = new Progress<string>(m => _status.Text = m);
+        try
+        {
+            var findings = await Task.Run(() => SecurityAnalyzer.Analyze(reader, progress, ct), ct);
+
+            _lvSecurity.BeginUpdate();
+            foreach (var f in findings)
+            {
+                var it = new ListViewItem(f.Severity) { Tag = f.Address };
+                it.SubItems.Add(f.Category);
+                it.SubItems.Add(f.Detail);
+                if (f.Severity == "Alta") it.ForeColor = Color.Firebrick;
+                else if (f.Severity == "Media") it.ForeColor = Color.DarkGoldenrod;
+                _lvSecurity.Items.Add(it);
+            }
+            _lvSecurity.EndUpdate();
+            int alta = findings.Count(x => x.Severity == "Alta");
+            _status.Text = $"{findings.Count} hallazgos ({alta} de severidad alta).";
+        }
+        catch (OperationCanceledException) { _status.Text = "Analisis cancelado."; }
+        catch (Exception ex) { _status.Text = "Error: " + ex.Message; }
+        finally { _secCts?.Dispose(); _secCts = null; }
+    }
+
+    private void JumpFromSecurity()
+    {
+        if (_reader == null || _lvSecurity.SelectedItems.Count == 0) return;
+        ulong addr = (ulong)_lvSecurity.SelectedItems[0].Tag!;
+        if (addr == 0) return;
+        _txtAddress.Text = "0x" + addr.ToString("X");
+        _txtSize.Text = "256";
+        ReadHexAtAddress();
+        if (_txtHex.Parent is TabPage page && page.Parent is TabControl tc)
+            tc.SelectedTab = page;
+    }
+
+    private void ExportSecurityCsv()
+    {
+        if (_lvSecurity.Items.Count == 0) { _status.Text = "No hay hallazgos que exportar."; return; }
+        using var sfd = new SaveFileDialog
+        {
+            Title = "Guardar informe de seguridad",
+            FileName = "seguridad.csv",
+            Filter = "CSV (*.csv)|*.csv|Todos los archivos (*.*)|*.*"
+        };
+        if (sfd.ShowDialog(this) != DialogResult.OK) return;
+        try
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("severidad,categoria,detalle");
+            foreach (ListViewItem it in _lvSecurity.Items)
+            {
+                string det = it.SubItems[2].Text.Replace("\"", "\"\"");
+                sb.AppendLine($"{it.Text},{it.SubItems[1].Text},\"{det}\"");
+            }
+            File.WriteAllText(sfd.FileName, sb.ToString());
+            _status.Text = "Guardado en " + sfd.FileName;
+        }
+        catch (Exception ex) { _status.Text = "Error al guardar: " + ex.Message; }
     }
 
     // ---------------- Strings ----------------
