@@ -1,0 +1,17 @@
+# Compilados de .NET
+bin/
+obj/
+publish/
+
+# Salidas de volcados de memoria generadas por la herramienta
+*.bin
+*.dmp
+
+# Visual Studio / Rider
+.vs/
+.idea/
+*.user
+*.suo
+
+# Otros
+*.log

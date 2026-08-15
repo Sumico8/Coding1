@@ -1,0 +1,121 @@
+# MemReader
+
+Herramienta de **lectura de memoria de procesos** para Windows 11, pensada para
+pentesting, análisis de malware en laboratorio, forense y CTF. Es una aplicación
+de escritorio (WinForms, .NET 8) que:
+
+- Lista todos los procesos en ejecución.
+- Abre el proceso que selecciones **en modo solo lectura**.
+- Enumera sus regiones de memoria (dirección, tamaño, protección, tipo).
+- Muestra la memoria en un **visor hexadecimal** (hex + ASCII).
+- **Busca cadenas** en toda la memoria del proceso (ASCII y UTF-16), útil para
+  localizar tokens, claves o texto en claro.
+- **Vuelca** una región completa a un archivo `.bin`.
+
+Todo se apoya en APIs **documentadas y soportadas** de Windows
+(`OpenProcess`, `VirtualQueryEx`, `ReadProcessMemory`). No modifica la memoria de
+otros procesos: solo la lee.
+
+---
+
+## Sobre el nivel "kernel" (léelo antes de nada)
+
+Pediste una herramienta que "opere a nivel kernel". Voy a ser honesto sobre por
+qué **esta herramienta funciona en modo usuario** y no incluye un driver de kernel:
+
+- Para el objetivo real —**leer la memoria de un proceso que tú eliges**— el modo
+  usuario con privilegios de Administrador (`SeDebugPrivilege`) es suficiente y es
+  el enfoque estándar que usan herramientas como Process Hacker/System Informer,
+  x64dbg o Cheat Engine para la mayoría de casos.
+- Un driver de kernel propio cuyo único fin es leer la memoria de **cualquier**
+  proceso, incluidos los **protegidos** (PPL: LSASS, antivirus/EDR, anti-cheat),
+  es precisamente la primitiva que usan los rootkits y las técnicas de evasión de
+  EDR (p. ej. el patrón *Bring Your Own Vulnerable Driver*). Escribir ese
+  componente equivale a entregar una herramienta para saltarse controles de
+  seguridad, así que no lo incluyo.
+- Además, desde Windows Vista todo driver debe ir **firmado** por Microsoft para
+  cargarse (KMCS + integridad de la firma). Un driver "casero" no cargará en un
+  Windows 11 normal sin desactivar protecciones del sistema, lo que en la práctica
+  descarta el enfoque para un uso legítimo fuera de un laboratorio con Test Mode.
+
+Si tu caso **legítimo** necesita inspeccionar memoria de kernel o de procesos
+protegidos (por ejemplo, investigación en un laboratorio aislado), el camino
+soportado por Microsoft es el **depurador de kernel local con WinDbg/KD**:
+
+```
+bcdedit /debug on            (en la VM de laboratorio)
+```
+
+y luego abrir WinDbg como *Local Kernel Debugging*, o depuración de kernel remota
+por red entre dos máquinas. Eso te da lectura de memoria de kernel de forma legal,
+firmada y reversible, sin construir un rootkit.
+
+> **Uso responsable.** Usa MemReader solo sobre sistemas y procesos que te
+> pertenezcan o para los que tengas **autorización escrita** (un contrato de
+> pentesting, tu propio laboratorio, un reto de CTF). Leer la memoria de procesos
+> ajenos sin permiso puede ser delito.
+
+---
+
+## Requisitos
+
+- Windows 10/11 de 64 bits.
+- [.NET SDK 8.0](https://dotnet.microsoft.com/download/dotnet/8.0) para compilar.
+- Ejecutar la app **como Administrador** (el manifiesto ya lo solicita).
+
+## Compilar
+
+Desde la carpeta del proyecto, en una terminal de Windows:
+
+```powershell
+# Compilación rápida para desarrollo
+dotnet build -c Release
+
+# O generar un único .exe autocontenido (no necesita .NET instalado en destino)
+dotnet publish -c Release -r win-x64 --self-contained true `
+  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+```
+
+El ejecutable quedará en:
+
+```
+bin\Release\net8.0-windows\win-x64\publish\MemReader.exe
+```
+
+También puedes usar el script incluido:
+
+```powershell
+.\build.ps1
+```
+
+## Ejecutar
+
+1. Clic derecho en `MemReader.exe` → **Ejecutar como administrador**.
+2. Pulsa **Actualizar procesos** y selecciona uno (doble clic o *Analizar*).
+3. Elige una **región** para verla en el visor hexadecimal, o escribe una
+   dirección/tamaño manualmente.
+4. Usa la pestaña **Buscar en memoria** para encontrar texto.
+5. **Volcar región a archivo** guarda los bytes crudos en disco.
+
+## Notas técnicas
+
+- El binario se compila como **x64**; el struct `MEMORY_BASIC_INFORMATION` usa el
+  layout de 64 bits.
+- Solo se solicitan los permisos `PROCESS_QUERY_INFORMATION | PROCESS_VM_READ`.
+  No se pide acceso de escritura.
+- Windows **denegará** el acceso a procesos protegidos (PPL) aunque seas
+  Administrador. Es el comportamiento correcto y esperado; verás un error Win32
+  (normalmente `5 = Acceso denegado`).
+
+## Estructura
+
+```
+MemReader.csproj              Proyecto .NET (WinForms, x64)
+app.manifest                  Solicita elevación (Administrador) + DPI
+src/NativeMethods.cs          P/Invoke a kernel32 (APIs documentadas)
+src/Privileges.cs             Habilita SeDebugPrivilege (advapi32)
+src/ProcessMemoryReader.cs    Núcleo: abrir proceso, enumerar y leer memoria
+src/HexFormatter.cs           Volcado hexadecimal
+src/MainForm.cs               Interfaz gráfica
+src/Program.cs                Punto de entrada
+```
