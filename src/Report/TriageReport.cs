@@ -22,6 +22,8 @@ public sealed class TriageReport
     public string CommandLine { get; set; } = "";
     public int SessionId { get; set; }
     public string StartTime { get; set; } = "";
+    public string Protection { get; set; } = "";
+    public string Mitigations { get; set; } = "";
 
     public int RegionCount { get; set; }
     public ulong CommittedBytes { get; set; }

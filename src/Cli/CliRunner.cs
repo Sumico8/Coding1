@@ -461,10 +461,14 @@ internal static class CliRunner
         sb.AppendLine($"parent_name,{Csv(d.ParentName)}");
         sb.AppendLine($"session,{d.SessionId}");
         sb.AppendLine($"start,{Csv(d.StartTime)}");
+        sb.AppendLine($"protection,{Csv(d.Protection)}");
+        sb.AppendLine($"mitigations,{Csv(d.Mitigations)}");
         sb.AppendLine($"command_line,{Csv(d.CommandLine)}");
         WriteOutput(sb.ToString(), Get(opts, "out"));
 
         Console.Error.WriteLine($"pid {d.Pid} <- padre {d.ParentPid} ({d.ParentName}); sesion {d.SessionId}; inicio {d.StartTime}.");
+        if (!string.IsNullOrEmpty(d.Protection) && d.Protection != "None")
+            Console.Error.WriteLine($"  proteccion: {d.Protection}   mitigaciones: {d.Mitigations}");
         if (!string.IsNullOrEmpty(d.CommandLine)) Console.Error.WriteLine("  cmdline: " + d.CommandLine);
         return 0;
     }

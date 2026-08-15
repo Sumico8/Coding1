@@ -36,6 +36,8 @@ public static class TriageEngine
         r.CommandLine = info.CommandLine;
         r.SessionId = info.SessionId;
         r.StartTime = info.StartTime;
+        r.Protection = info.Protection;
+        r.Mitigations = info.Mitigations;
 
         progress?.Report("Enumerando regiones...");
         var regions = reader.EnumerateRegions(onlyReadable: false);

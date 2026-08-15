@@ -27,6 +27,8 @@ public static class HtmlReportWriter
         if (r.SessionId >= 0) Meta(sb, "Sesion", r.SessionId.ToString());
         if (!string.IsNullOrEmpty(r.StartTime)) Meta(sb, "Inicio", E(r.StartTime));
         if (!string.IsNullOrEmpty(r.CommandLine)) Meta(sb, "Linea de comandos", E(r.CommandLine));
+        if (!string.IsNullOrEmpty(r.Protection) && r.Protection != "None") Meta(sb, "Proteccion", E(r.Protection));
+        if (!string.IsNullOrEmpty(r.Mitigations)) Meta(sb, "Mitigaciones", E(r.Mitigations));
         Meta(sb, "Analizador elevado", r.AnalyzerElevated ? "si" : "no");
         Meta(sb, "Generado (UTC)", E(r.GeneratedUtc));
         Meta(sb, "Version", E(r.Tool + " " + r.ToolVersion));

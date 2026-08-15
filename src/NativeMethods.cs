@@ -225,11 +225,22 @@ internal static class NativeMethods
     // (60, Win8.1+) da la linea de comandos. Solo consulta, sin escribir nada.
     public const int ProcessBasicInformation = 0;
     public const int ProcessCommandLineInformation = 60;
+    public const int ProcessProtectionInformation = 61;
+
+    // Indices de PROCESS_MITIGATION_POLICY (subconjunto).
+    public const int ProcessDynamicCodePolicy = 2;
+    public const int ProcessControlFlowGuardPolicy = 7;
+    public const int ProcessSignaturePolicy = 8;
 
     [DllImport("ntdll.dll")]
     public static extern uint NtQueryInformationProcess(
         IntPtr processHandle, int processInformationClass, IntPtr processInformation,
         int processInformationLength, out int returnLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetProcessMitigationPolicy(
+        IntPtr hProcess, int mitigationPolicy, IntPtr lpBuffer, IntPtr dwLength);
 
     /// <summary>Devuelve true si la proteccion de la pagina permite lectura.</summary>
     public static bool IsReadable(uint protect)
